@@ -1232,7 +1232,12 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
         setDescriptionTemplate(result.template.description_template || "");
       })
       .catch(() => undefined);
-  }, []);
+    if (connection) {
+      adminApi.calendarList()
+        .then((result) => setAvailable(result.calendars))
+        .catch(() => undefined);
+    }
+  }, [connection]);
 
   const saveTemplate = async () => {
     setSavingTemplate(true);
