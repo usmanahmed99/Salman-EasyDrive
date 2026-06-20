@@ -197,6 +197,7 @@ function EmergencyControl({
   const [serviceTarget, setServiceTarget] = useState(services[0]?.id || "");
   const [resourceTarget, setResourceTarget] = useState(resources[0]?.id || "");
   const [when, setWhen] = useState("today");
+  const [customMinutes, setCustomMinutes] = useState(30);
   const [capacity, setCapacity] = useState(1);
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
@@ -212,10 +213,12 @@ function EmergencyControl({
     const now = new Date();
     const end = new Date(now);
     if (when === "now") end.setHours(now.getHours() + 2);
-    if (when === "today") end.setHours(23, 59, 59, 999);
-    if (when === "tomorrow") {
+    else if (when === "today") end.setHours(23, 59, 59, 999);
+    else if (when === "tomorrow") {
       now.setDate(now.getDate() + 1); now.setHours(0, 0, 0, 0);
       end.setDate(end.getDate() + 1); end.setHours(23, 59, 59, 999);
+    } else if (when === "custom") {
+      end.setTime(now.getTime() + customMinutes * 60_000);
     }
     const payload = {
       centerId,
@@ -237,7 +240,7 @@ function EmergencyControl({
         ...created,
         center: center?.name || "",
         target: action === "center_closed" ? "All services" : action === "resource_blocked" ? (resource?.name || "Resource") : (service?.name.en || "Service"),
-        period: when === "today" ? "Rest of today" : when,
+        period: when === "today" ? "Rest of today" : when === "tomorrow" ? "Tomorrow" : when === "now" ? "Next 2 hours" : when === "custom" ? `Next ${customMinutes < 60 ? `${customMinutes}m` : `${customMinutes / 60}h`}` : when,
         detail: action === "service_capacity" ? `Limit: ${capacity}` : "Closed",
         reason
       });
@@ -306,13 +309,29 @@ function EmergencyControl({
                 </select>
               </Field>
             )}
-            <Field label="When?">
-              <select className="field" value={when} onChange={(event) => setWhen(event.target.value)}>
-                <option value="now">Now · next 2 hours</option>
-                <option value="today">Rest of today</option>
-                <option value="tomorrow">Tomorrow</option>
-              </select>
-            </Field>
+            <div className={clsx("space-y-2", when !== "custom" && "")}>
+              <Field label="When?">
+                <select className="field" value={when} onChange={(event) => setWhen(event.target.value)}>
+                  <option value="now">Now · next 2 hours</option>
+                  <option value="today">Rest of today</option>
+                  <option value="tomorrow">Tomorrow</option>
+                  <option value="custom">Custom duration…</option>
+                </select>
+              </Field>
+              {when === "custom" && (
+                <div className="flex items-center gap-2">
+                  <input className="field w-24" type="number" min="1" value={customMinutes} onChange={(event) => setCustomMinutes(Math.max(1, Number(event.target.value)))} />
+                  <select className="field" value={customMinutes % 60 === 0 && customMinutes >= 60 ? "hours" : "minutes"}
+                    onChange={(event) => {
+                      if (event.target.value === "hours") setCustomMinutes((m) => Math.max(1, Math.round(m / 60)) * 60);
+                      else setCustomMinutes((m) => m >= 60 ? m / 60 : m);
+                    }}>
+                    <option value="minutes">minutes</option>
+                    <option value="hours">hours</option>
+                  </select>
+                </div>
+              )}
+            </div>
             {action === "service_capacity" && (
               <Field label="Maximum concurrent bookings">
                 <input className="field" min="0" type="number" value={capacity} onChange={(event) => setCapacity(Number(event.target.value))} />
