@@ -29,9 +29,9 @@ const CALENDAR_SCOPES = [
   "openid",
   "email",
   "profile",
-  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-  "https://www.googleapis.com/auth/calendar.freebusy",
-  "https://www.googleapis.com/auth/calendar.events"
+  // Full calendar scope covers create/delete calendars, ACL management, events, and free/busy.
+  // The narrower calendar.events scope cannot create calendars or manage ACLs.
+  "https://www.googleapis.com/auth/calendar"
 ];
 
 export function googleAuthorizationUrl(env: Env, state: string, purpose: "login" | "calendar") {
