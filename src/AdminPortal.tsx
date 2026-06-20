@@ -809,21 +809,7 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
-  const [availableCalendars, setAvailableCalendars] = useState<Array<{ id: string; summary: string }> | null>(null);
-  const [listing, setListing] = useState(false);
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
-
-  const loadCalendars = async () => {
-    setListing(true);
-    try {
-      const result = await adminApi.calendarList();
-      setAvailableCalendars(result.calendars);
-    } catch {
-      setError("Could not load calendars. Make sure your Google account is connected.");
-    } finally {
-      setListing(false);
-    }
-  };
 
   const save = async () => {
     setError("");
@@ -863,22 +849,7 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
         </Field>
         <Field label="Email"><input className="field" type="email" value={v.email} onChange={(event) => set("email", event.target.value)} /></Field>
         <Field label="Phone"><input className="field" value={v.phone} onChange={(event) => set("phone", event.target.value)} /></Field>
-        <div className="sm:col-span-2">
-          <div className="flex items-center justify-between mb-1">
-            <span className="label">Google Calendar</span>
-            <button type="button" className="text-xs text-blue-600 hover:underline disabled:opacity-50" onClick={loadCalendars} disabled={listing}>
-              {listing ? "Loading…" : "Load from Google"}
-            </button>
-          </div>
-          {availableCalendars ? (
-            <select className="field" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)}>
-              <option value="">— select a calendar —</option>
-              {availableCalendars.map((cal) => <option key={cal.id} value={cal.id}>{cal.summary}</option>)}
-            </select>
-          ) : (
-            <input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" />
-          )}
-        </div>
+        <label className="block sm:col-span-2"><span className="label">Google Calendar ID</span><input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" /></label>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
             <option value="1">Active</option>
@@ -1193,9 +1164,10 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
 /* Calendar                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function CalendarScreen({ centers, services, mappings, connections, reload, toast }: {
+function CalendarScreen({ centers, services, resources, mappings, connections, reload, toast }: {
   centers: Center[];
   services: Service[];
+  resources: AdminResource[];
   mappings: CalendarMapping[];
   connections: Array<Record<string, string>>;
   reload: () => void;
@@ -1371,6 +1343,8 @@ function CalendarScreen({ centers, services, mappings, connections, reload, toas
             </div>
           </div>
         </div>
+
+        <ResourceCalendarSection resources={resources} available={available} reload={reload} toast={toast} />
       </div>
       <div className="rounded-2xl bg-ink p-6 text-white shadow-soft">
         <CalendarDays className="text-brand-300" size={27} />
@@ -1379,7 +1353,78 @@ function CalendarScreen({ centers, services, mappings, connections, reload, toas
         <div className="mt-5 space-y-3 text-xs text-slate-200">
           {["No instructor dashboard required", "Live conflict checks", "Student invite from one canonical event"].map((item) => <p className="flex items-center gap-2" key={item}><Check className="text-emerald-400" size={15} /> {item}</p>)}
         </div>
-        <p className="mt-6 rounded-xl bg-white/5 p-3 text-xs leading-5 text-slate-300">Instructor calendar IDs are set on the <strong>Instructors &amp; cars</strong> screen.</p>
+      </div>
+    </div>
+  );
+}
+
+function ResourceCalendarSection({ resources, available, reload, toast }: {
+  resources: AdminResource[];
+  available: Array<{ id: string; summary: string }> | null;
+  reload: () => void;
+  toast: ReturnType<typeof useToast>;
+}) {
+  const named = resources.filter((r) => r.type === "instructor" || r.type === "vehicle");
+  const [saving, setSaving] = useState<string | null>(null);
+  const [selections, setSelections] = useState<Record<string, string>>(() =>
+    Object.fromEntries(named.map((r) => [r.id, r.calendar_id || ""]))
+  );
+
+  const save = async (resource: AdminResource) => {
+    setSaving(resource.id);
+    try {
+      await adminApi.updateResource(resource.id, {
+        type: resource.type, name: resource.name, email: resource.email, phone: resource.phone,
+        calendarId: selections[resource.id] || null,
+        groupId: resource.group_id, centerId: resource.center_id,
+        enabled: Boolean(resource.enabled), publicVisible: Boolean(resource.public_visible)
+      });
+      toast.show("success", `Calendar updated for ${resource.name}.`);
+      reload();
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  if (named.length === 0) return null;
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="border-b border-slate-100 p-5">
+        <h2 className="font-extrabold text-ink">Instructor &amp; vehicle calendars</h2>
+        <p className="mt-1 text-xs text-slate-500">Assign a Google Calendar to each instructor or vehicle. The app writes blocking events here and checks FreeBusy against it.</p>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {named.map((resource) => (
+          <div className="flex items-center gap-3 px-5 py-4" key={resource.id}>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-bold text-ink">{resource.name} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">{resource.type}</span></p>
+              {available ? (
+                <select
+                  className="field mt-2 text-xs"
+                  value={selections[resource.id] || ""}
+                  onChange={(e) => setSelections((prev) => ({ ...prev, [resource.id]: e.target.value }))}
+                >
+                  <option value="">— no calendar —</option>
+                  {available.map((cal) => <option key={cal.id} value={cal.id}>{cal.summary}</option>)}
+                </select>
+              ) : (
+                <p className="mt-1 truncate font-mono text-xs text-slate-400">{resource.calendar_id || "No calendar set — load calendars above to assign"}</p>
+              )}
+            </div>
+            {available && (
+              <button
+                className="primary-button shrink-0 px-3 py-1.5 text-xs"
+                disabled={saving === resource.id}
+                onClick={() => save(resource)}
+              >
+                {saving === resource.id ? <LoaderCircle className="animate-spin" size={14} /> : "Save"}
+              </button>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1624,7 +1669,7 @@ export default function AdminPortal() {
     if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} reload={loadAll} toast={toast} />;
     if (section === "availability") return <AvailabilityScreen centers={centers} services={services} groups={groups} toast={toast} />;
     if (section === "forms") return <FormBuilderScreen forms={forms} reload={loadAll} toast={toast} />;
-    if (section === "calendar") return <CalendarScreen centers={centers} services={services} mappings={mappings} connections={connections} reload={loadAll} toast={toast} />;
+    if (section === "calendar") return <CalendarScreen centers={centers} services={services} resources={resources} mappings={mappings} connections={connections} reload={loadAll} toast={toast} />;
     if (section === "privacy") return <PrivacyScreen toast={toast} />;
     return null;
   };
