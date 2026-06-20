@@ -809,7 +809,21 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [availableCalendars, setAvailableCalendars] = useState<Array<{ id: string; summary: string }> | null>(null);
+  const [listing, setListing] = useState(false);
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
+
+  const loadCalendars = async () => {
+    setListing(true);
+    try {
+      const result = await adminApi.calendarList();
+      setAvailableCalendars(result.calendars);
+    } catch {
+      setError("Could not load calendars. Make sure your Google account is connected.");
+    } finally {
+      setListing(false);
+    }
+  };
 
   const save = async () => {
     setError("");
@@ -849,7 +863,22 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
         </Field>
         <Field label="Email"><input className="field" type="email" value={v.email} onChange={(event) => set("email", event.target.value)} /></Field>
         <Field label="Phone"><input className="field" value={v.phone} onChange={(event) => set("phone", event.target.value)} /></Field>
-        <label className="block sm:col-span-2"><span className="label">Google Calendar ID</span><input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" /></label>
+        <div className="sm:col-span-2">
+          <div className="flex items-center justify-between mb-1">
+            <span className="label">Google Calendar</span>
+            <button type="button" className="text-xs text-blue-600 hover:underline disabled:opacity-50" onClick={loadCalendars} disabled={listing}>
+              {listing ? "Loading…" : "Load from Google"}
+            </button>
+          </div>
+          {availableCalendars ? (
+            <select className="field" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)}>
+              <option value="">— select a calendar —</option>
+              {availableCalendars.map((cal) => <option key={cal.id} value={cal.id}>{cal.summary}</option>)}
+            </select>
+          ) : (
+            <input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" />
+          )}
+        </div>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
             <option value="1">Active</option>
