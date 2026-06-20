@@ -1414,7 +1414,7 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
     setSaving(resource.id);
     try {
       await adminApi.updateResource(resource.id, {
-        type: resource.type, name: resource.name, email: resource.email, phone: resource.phone,
+        type: resource.type, name: resource.name, email: resource.email || "", phone: resource.phone || "",
         calendarId: selections[resource.id] || null,
         groupId: resource.group_id, centerId: resource.center_id,
         enabled: Boolean(resource.enabled), publicVisible: Boolean(resource.public_visible)
