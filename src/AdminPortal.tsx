@@ -1329,8 +1329,19 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
               <p className="mt-1 text-sm text-slate-500">{connection ? `${connection.google_email} · ${connection.status}` : "Connect an owner Google account to enable Calendar sync."}</p>
             </div>
           </div>
-          {!connection && <a className="primary-button mt-5" href="/api/auth/google/start"><Link2 size={16} /> Connect Google account</a>}
-          {connection && <button className="secondary-button mt-5" disabled={listing} onClick={loadCalendars}>{listing ? <LoaderCircle className="animate-spin" size={16} /> : <RefreshCw size={16} />} Load available calendars</button>}
+          {!connection && (
+            <form method="POST" action="/api/admin/calendar/connect" className="mt-5">
+              <button type="submit" className="primary-button"><Link2 size={16} /> Connect Google account</button>
+            </form>
+          )}
+          {connection && (
+            <div className="mt-5 flex flex-wrap gap-3">
+              <button className="secondary-button" disabled={listing} onClick={loadCalendars}>{listing ? <LoaderCircle className="animate-spin" size={16} /> : <RefreshCw size={16} />} Load available calendars</button>
+              <form method="POST" action="/api/admin/calendar/connect">
+                <button type="submit" className="secondary-button"><Link2 size={16} /> Reconnect / reauthorise</button>
+              </form>
+            </div>
+          )}
         </div>
 
         <div className="card overflow-hidden">
