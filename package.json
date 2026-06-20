@@ -1,0 +1,47 @@
+{
+  "name": "easy-driving-booking",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently --kill-others --names WEB,API --prefix-colors cyan,magenta \"npm:dev:web\" \"npm:dev:worker\"",
+    "dev:web": "vite",
+    "dev:worker": "wrangler dev --local --port 8787",
+    "build": "tsc -b && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --pretty false",
+    "deploy:web": "vite build && wrangler pages deploy dist",
+    "deploy:worker": "wrangler deploy",
+    "db:migrate:local": "wrangler d1 migrations apply easy-driving-booking --local",
+    "db:migrate:remote": "wrangler d1 migrations apply easy-driving-booking --remote",
+    "db:seed:local": "wrangler d1 execute easy-driving-booking --local --file=./seed/01-centers.sql && wrangler d1 execute easy-driving-booking --local --file=./seed/02-services.sql && wrangler d1 execute easy-driving-booking --local --file=./seed/03-forms.sql && wrangler d1 execute easy-driving-booking --local --file=./seed/04-resources.sql",
+    "db:seed:remote": "wrangler d1 execute easy-driving-booking --remote --file=./seed/01-centers.sql && wrangler d1 execute easy-driving-booking --remote --file=./seed/02-services.sql && wrangler d1 execute easy-driving-booking --remote --file=./seed/03-forms.sql && wrangler d1 execute easy-driving-booking --remote --file=./seed/04-resources.sql"
+  },
+  "dependencies": {
+    "@hookform/resolvers": "^3.9.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "lucide-react": "^1.21.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-hook-form": "^7.54.2",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241230.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^6.0.2",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.2.1",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.7.2",
+    "vite": "^8.0.16",
+    "vitest": "^4.1.9",
+    "wrangler": "^4.103.0"
+  }
+}

@@ -1,0 +1,80 @@
+import type { Language } from "../shared/types";
+
+export const copy = {
+  en: {
+    book: "Book now",
+    back: "Back",
+    continue: "Continue",
+    location: "Location",
+    service: "Service",
+    schedule: "Date & time",
+    details: "Your details",
+    confirmed: "Confirmed",
+    chooseLocation: "Where would you like to book?",
+    chooseService: "What can we help you with?",
+    chooseTime: "Choose a time that works",
+    completeDetails: "A few details and you’re all set",
+    availableTimes: "Available times",
+    noTimes: "No openings on this day",
+    noTimesHint: "Try another date. New openings are added regularly.",
+    loading: "Checking live availability…",
+    duration: "Duration",
+    bookingSummary: "Booking summary",
+    fastBooking: "Takes about 2 minutes",
+    calendarInvite: "Calendar invitation included",
+    bilingual: "Bilingual service",
+    secure: "Secure booking",
+    finalConfirm: "Confirm booking",
+    successTitle: "You’re booked.",
+    successText: "A calendar invitation is on its way. Keep this reference for any changes.",
+    reference: "Booking reference",
+    manage: "Manage booking",
+    another: "Book another service",
+    required: "Required",
+    select: "Select an option",
+    trust: "Trusted by 1,100+ students since 2015",
+    live: "Live availability",
+    requestOnly: "Request only"
+  },
+  fr: {
+    book: "Réserver",
+    back: "Retour",
+    continue: "Continuer",
+    location: "Lieu",
+    service: "Service",
+    schedule: "Date et heure",
+    details: "Vos coordonnées",
+    confirmed: "Confirmé",
+    chooseLocation: "Où souhaitez-vous réserver?",
+    chooseService: "Comment pouvons-nous vous aider?",
+    chooseTime: "Choisissez l’heure qui vous convient",
+    completeDetails: "Quelques détails et le tour est joué",
+    availableTimes: "Heures disponibles",
+    noTimes: "Aucune disponibilité ce jour-là",
+    noTimesHint: "Essayez une autre date. De nouvelles places sont ajoutées régulièrement.",
+    loading: "Vérification des disponibilités…",
+    duration: "Durée",
+    bookingSummary: "Résumé de la réservation",
+    fastBooking: "Environ 2 minutes",
+    calendarInvite: "Invitation calendrier incluse",
+    bilingual: "Service bilingue",
+    secure: "Réservation sécurisée",
+    finalConfirm: "Confirmer la réservation",
+    successTitle: "Votre réservation est confirmée.",
+    successText: "Une invitation calendrier est en route. Conservez cette référence pour tout changement.",
+    reference: "Numéro de réservation",
+    manage: "Gérer la réservation",
+    another: "Réserver un autre service",
+    required: "Obligatoire",
+    select: "Choisir une option",
+    trust: "La confiance de plus de 1 100 élèves depuis 2015",
+    live: "Disponibilités en direct",
+    requestOnly: "Sur demande"
+  }
+} as const;
+
+export function getLanguage(): Language {
+  const query = new URLSearchParams(window.location.search).get("lang");
+  if (query === "fr" || window.location.pathname.startsWith("/fr/")) return "fr";
+  return "en";
+}

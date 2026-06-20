@@ -1,0 +1,13 @@
+# Leave GOOGLE_CLIENT_ID empty for local dev to enable the "Developer sign-in (local)"
+# button on /admin. It signs you in as the first ADMIN_EMAILS user. Setting
+# GOOGLE_CLIENT_ID (any non-empty value) disables that bypass and requires Google OAuth.
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=http://localhost:8787/api/auth/google/callback
+SESSION_SECRET=replace-with-a-long-random-value
+TOKEN_ENCRYPTION_KEY=replace-with-a-different-long-random-value
+APP_BASE_URL=http://localhost:5173
+PUBLIC_SITE_ORIGIN=http://localhost:5173
+TURNSTILE_SECRET_KEY=
+TURNSTILE_SITE_KEY=
+ADMIN_EMAILS=owner@example.com

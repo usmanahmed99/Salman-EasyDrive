@@ -1,0 +1,31 @@
+name = "easy-driving-booking-api"
+main = "worker/index.ts"
+compatibility_date = "2024-12-30"
+workers_dev = true
+routes = [
+  { pattern = "easydriving.nextiadriveops.com/api/*", zone_name = "nextiadriveops.com" }
+]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "easy-driving-booking"
+database_id = "4a4f4eb4-3e5d-497b-8f3f-bad21baa21e7"
+migrations_dir = "migrations"
+
+[[durable_objects.bindings]]
+name = "BOOKING_LOCK"
+class_name = "BookingLock"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BookingLock"]
+
+[triggers]
+crons = ["17 5 * * *"]
+
+[vars]
+APP_BASE_URL = "https://easydriving.nextiadriveops.com"
+PUBLIC_SITE_ORIGIN = "https://easydriving.nextiadriveops.com"
+GOOGLE_REDIRECT_URI = "https://easydriving.nextiadriveops.com/api/auth/google/callback"
+DEFAULT_TIMEZONE = "America/Montreal"
+ADMIN_EMAILS = "easydrivingca@gmail.com,monsieur.usman.ahmed@gmail.com"

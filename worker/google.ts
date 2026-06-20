@@ -1,0 +1,139 @@
+import type { Env } from "./types";
+import { decrypt, HttpError } from "./utils";
+
+interface GoogleConnection {
+  encrypted_refresh_token: string;
+}
+
+async function accessToken(env: Env) {
+  const connection = await env.DB.prepare(`
+    SELECT encrypted_refresh_token FROM google_connections
+    WHERE status = 'connected' ORDER BY updated_at DESC LIMIT 1
+  `).first<GoogleConnection>();
+  if (!connection) return null;
+  const refreshToken = await decrypt(env.TOKEN_ENCRYPTION_KEY, connection.encrypted_refresh_token);
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token"
+    })
+  });
+  const body = await response.json() as { access_token?: string; error_description?: string };
+  if (!response.ok || !body.access_token) {
+    await env.DB.prepare("UPDATE google_connections SET status = 'error', last_error = ?, updated_at = CURRENT_TIMESTAMP")
+      .bind(body.error_description || "Token refresh failed").run();
+    throw new HttpError(502, "Google Calendar needs to be reconnected.", "google_reconnect_required");
+  }
+  return body.access_token;
+}
+
+export async function listCalendars(env: Env) {
+  const token = await accessToken(env);
+  if (!token) return [];
+  const response = await fetch("https://www.googleapis.com/calendar/v3/users/me/calendarList?minAccessRole=writer", {
+    headers: { Authorization: `Bearer ${token}` }
+  });
+  if (!response.ok) {
+    console.error("[google] calendarList failed", response.status, await response.text());
+    throw new HttpError(502, "Could not load Google calendars.", "google_calendar_list_failed");
+  }
+  const body = await response.json() as { items?: Array<{ id: string; summary: string; primary?: boolean; accessRole?: string }> };
+  return body.items || [];
+}
+
+export async function getFreeBusy(
+  env: Env,
+  calendarIds: string[],
+  timeMin: string,
+  timeMax: string
+): Promise<Record<string, Array<{ start: string; end: string }>>> {
+  if (!calendarIds.length) return {};
+  const token = await accessToken(env);
+  if (!token) return {};
+  const response = await fetch("https://www.googleapis.com/calendar/v3/freeBusy", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      timeMin,
+      timeMax,
+      items: calendarIds.map((id) => ({ id }))
+    })
+  });
+  if (!response.ok) {
+    console.error("[google] freeBusy failed", response.status, await response.text());
+    throw new HttpError(502, "Calendar availability is temporarily unavailable.", "google_freebusy_failed");
+  }
+  const body = await response.json() as {
+    calendars?: Record<string, { busy?: Array<{ start: string; end: string }> }>;
+  };
+  return Object.fromEntries(
+    Object.entries(body.calendars || {}).map(([id, value]) => [id, value.busy || []])
+  );
+}
+
+export async function createCalendarEvent(
+  env: Env,
+  calendarId: string,
+  event: {
+    summary: string;
+    description: string;
+    start: string;
+    end: string;
+    timezone: string;
+    attendeeEmail?: string;
+    bookingId: string;
+    reference: string;
+  },
+  sendUpdates: boolean
+) {
+  const token = await accessToken(env);
+  if (!token) throw new HttpError(503, "Google Calendar is not connected.", "google_not_connected");
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events?sendUpdates=${sendUpdates ? "all" : "none"}`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        summary: event.summary,
+        description: event.description,
+        start: { dateTime: event.start, timeZone: event.timezone },
+        end: { dateTime: event.end, timeZone: event.timezone },
+        attendees: event.attendeeEmail && sendUpdates ? [{ email: event.attendeeEmail }] : undefined,
+        extendedProperties: {
+          private: {
+            easyDrivingBookingId: event.bookingId,
+            easyDrivingReference: event.reference
+          }
+        }
+      })
+    }
+  );
+  const body = await response.json() as { id?: string; error?: { message?: string } };
+  if (!response.ok || !body.id) {
+    console.error("[google] createCalendarEvent failed", response.status, JSON.stringify(body.error));
+    throw new Error(body.error?.message || "Calendar event creation failed");
+  }
+  return body.id;
+}
+
+export async function deleteCalendarEvent(
+  env: Env,
+  calendarId: string,
+  eventId: string,
+  sendUpdates: boolean
+) {
+  const token = await accessToken(env);
+  if (!token) throw new HttpError(503, "Google Calendar is not connected.", "google_not_connected");
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}?sendUpdates=${sendUpdates ? "all" : "none"}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+  );
+  // 204 = deleted. 404/410 mean the event is already gone — treat as success (idempotent).
+  if (response.ok || response.status === 404 || response.status === 410) return;
+  console.error("[google] deleteCalendarEvent failed", response.status, await response.text());
+  throw new Error(`Calendar event deletion failed (${response.status})`);
+}
