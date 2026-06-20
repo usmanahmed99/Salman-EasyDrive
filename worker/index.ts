@@ -182,6 +182,16 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       const results = await env.DB.prepare("SELECT * FROM resources WHERE deleted_at IS NULL ORDER BY name").all();
       return json({ resources: results.results });
     }
+    if (method === "DELETE" && id) {
+      const future = await env.DB.prepare(`
+        SELECT COUNT(*) AS count FROM booking_resource_allocations bra JOIN bookings b ON b.id=bra.booking_id
+        WHERE bra.resource_id=? AND b.start_at>CURRENT_TIMESTAMP AND b.status IN ('confirmed','calendar_sync_failed')
+      `).bind(id).first<{ count: number }>();
+      if (future?.count) throw new HttpError(409, "This resource has future bookings and cannot be deleted.", "future_bookings_exist");
+      await env.DB.prepare("UPDATE resources SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
+      await audit(env, user.id, "delete", "resource", id, {}, request);
+      return new Response(null, { status: 204 });
+    }
     const payload = resourceMutationSchema.parse(await readJson(request));
     if (method === "POST") {
       const nextId = uuid();
@@ -213,16 +223,6 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       `).bind(payload.groupId, payload.centerId, payload.type, payload.name, payload.email || null, payload.phone || null, payload.calendarId || null, Number(payload.enabled), Number(payload.publicVisible), id).run();
       await audit(env, user.id, "update", "resource", id, payload, request);
       return json({ id, ...payload });
-    }
-    if (method === "DELETE" && id) {
-      const future = await env.DB.prepare(`
-        SELECT COUNT(*) AS count FROM booking_resource_allocations bra JOIN bookings b ON b.id=bra.booking_id
-        WHERE bra.resource_id=? AND b.start_at>CURRENT_TIMESTAMP AND b.status IN ('confirmed','calendar_sync_failed')
-      `).bind(id).first<{ count: number }>();
-      if (future?.count) throw new HttpError(409, "This resource has future bookings and cannot be deleted.", "future_bookings_exist");
-      await env.DB.prepare("UPDATE resources SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
-      await audit(env, user.id, "delete", "resource", id, {}, request);
-      return new Response(null, { status: 204 });
     }
   }
 
