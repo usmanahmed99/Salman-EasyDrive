@@ -3,7 +3,7 @@ import type { BookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmBooking, serviceResponse, syncBookingCalendar, type ConfirmBookingPayload } from "./booking";
-import { createCalendar, listCalendars } from "./google";
+import { createCalendar, listCalendars, shareCalendar } from "./google";
 import type { DbCenter, DbService, Env } from "./types";
 import {
   assertTrustedOrigin,
@@ -192,6 +192,12 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
           console.error("[auto-calendar] instructor calendar creation failed", err);
           return null;
         });
+        // Share the new calendar with the instructor's email so it appears in their Google Calendar.
+        if (resolvedCalendarId && payload.email) {
+          shareCalendar(env, resolvedCalendarId, payload.email, "reader").catch((err: unknown) =>
+            console.error("[auto-calendar] instructor calendar share failed", err)
+          );
+        }
       }
       await env.DB.prepare(`
         INSERT INTO resources(id, group_id, center_id, type, name, email, phone, calendar_id, enabled, public_visible)

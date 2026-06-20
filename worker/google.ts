@@ -47,6 +47,22 @@ export async function createCalendar(env: Env, summary: string): Promise<string 
   return body.id;
 }
 
+export async function shareCalendar(env: Env, calendarId: string, email: string, role: "reader" | "freeBusyReader" = "reader") {
+  const token = await accessToken(env);
+  if (!token) return;
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/acl`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ role, scope: { type: "user", value: email } })
+    }
+  );
+  if (!response.ok) {
+    console.error("[google] shareCalendar failed", response.status, await response.text());
+  }
+}
+
 export async function listCalendars(env: Env) {
   const token = await accessToken(env);
   if (!token) return [];

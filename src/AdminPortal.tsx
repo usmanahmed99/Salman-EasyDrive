@@ -889,7 +889,17 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
         </Field>
         <Field label="Email"><input className="field" type="email" value={v.email} onChange={(event) => set("email", event.target.value)} /></Field>
         <Field label="Phone"><input className="field" value={v.phone} onChange={(event) => set("phone", event.target.value)} /></Field>
-        <label className="block sm:col-span-2"><span className="label">Google Calendar ID</span><input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" /></label>
+        <div className="sm:col-span-2 space-y-1.5">
+          <label className="block"><span className="label">Google Calendar ID</span><input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" /></label>
+          {v.calendarId && (
+            <a
+              href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(v.calendarId)}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 text-xs text-brand-600 hover:underline"
+            ><Link2 size={12} /> Share / subscribe link</a>
+          )}
+        </div>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
             <option value="1">Active</option>
@@ -952,6 +962,15 @@ function ResourcesScreen({ resources, groups, reload, toast }: { resources: Admi
                 <p className="mt-4 truncate rounded-lg bg-slate-50 p-3 font-mono text-[11px] text-slate-600">{resource.calendar_id || "No Google Calendar set"}</p>
                 <div className="mt-4 flex gap-2">
                   <button className="secondary-button flex-1 min-h-10 py-2" onClick={() => setEditing(resource)}>Manage</button>
+                  {resource.calendar_id && (
+                    <a
+                      href={`https://calendar.google.com/calendar/r?cid=${encodeURIComponent(resource.calendar_id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open subscribe link"
+                      className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-brand-200 hover:bg-brand-50 hover:text-brand-600"
+                    ><Link2 size={15} /></a>
+                  )}
                   <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(resource)}><Trash2 size={15} /></button>
                 </div>
               </div>
