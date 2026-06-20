@@ -217,12 +217,27 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       return json({ id: nextId, ...payload, calendarId: resolvedCalendarId }, 201);
     }
     if (method === "PATCH" && id) {
+      let resolvedCalendarId = payload.calendarId || null;
+      if (!resolvedCalendarId && payload.type === "instructor") {
+        const existing = await env.DB.prepare("SELECT calendar_id FROM resources WHERE id=?").bind(id).first<{ calendar_id: string | null }>();
+        if (!existing?.calendar_id) {
+          resolvedCalendarId = await createCalendar(env, payload.name).catch((err: unknown) => {
+            console.error("[auto-calendar] instructor calendar creation failed", err);
+            return null;
+          });
+          if (resolvedCalendarId && payload.email) {
+            shareCalendar(env, resolvedCalendarId, payload.email, "reader").catch((err: unknown) =>
+              console.error("[auto-calendar] instructor calendar share failed", err)
+            );
+          }
+        }
+      }
       await env.DB.prepare(`
         UPDATE resources SET group_id=?, center_id=?, type=?, name=?, email=?, phone=?, calendar_id=?,
         enabled=?, public_visible=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(payload.groupId, payload.centerId, payload.type, payload.name, payload.email || null, payload.phone || null, payload.calendarId || null, Number(payload.enabled), Number(payload.publicVisible), id).run();
-      await audit(env, user.id, "update", "resource", id, payload, request);
-      return json({ id, ...payload });
+      `).bind(payload.groupId, payload.centerId, payload.type, payload.name, payload.email || null, payload.phone || null, resolvedCalendarId, Number(payload.enabled), Number(payload.publicVisible), id).run();
+      await audit(env, user.id, "update", "resource", id, { ...payload, calendarId: resolvedCalendarId }, request);
+      return json({ id, ...payload, calendarId: resolvedCalendarId });
     }
   }
 
