@@ -506,7 +506,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json({ id: adminCancelMatch[1], status: "cancelled_by_admin", calendarCleanup: cleanup });
     }
 
-    if (path === "/api/admin/resource-groups") {
+    if (path.startsWith("/api/admin/resource-groups")) {
       const id = parseId(path, "/api/admin/resource-groups");
       if (method === "GET") {
         const results = await env.DB.prepare(`
