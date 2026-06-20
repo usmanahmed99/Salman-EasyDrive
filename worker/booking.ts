@@ -96,8 +96,8 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
       INSERT INTO bookings(
         id, reference, center_id, service_id, start_at, end_at, operational_start_at,
         operational_end_at, timezone, language, status, form_version,
-        form_schema_snapshot, public_token_hash, calendar_sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, 'pending')
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending')
     `).bind(
       id,
       reference,
@@ -111,7 +111,8 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
       payload.language,
       form.version,
       JSON.stringify(form),
-      tokenHash
+      tokenHash,
+      publicToken
     ),
     env.DB.prepare(`
       INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
@@ -189,8 +190,9 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   const visibleAnswers = form.fields
     .filter((field) => field.calendarVisible && answers[field.key])
     .map((field) => `${field.label.en}: ${String(answers[field.key])}`);
-  const manageUrl = knownPublicToken
-    ? `${env.APP_BASE_URL.replace(/\/$/, "")}/booking/${booking.reference}?token=${encodeURIComponent(knownPublicToken)}`
+  const token = knownPublicToken || booking.manage_token || "";
+  const manageUrl = token
+    ? `${env.APP_BASE_URL.replace(/\/$/, "")}/booking/${booking.reference}?token=${encodeURIComponent(token)}`
     : "";
 
   const template = await env.DB.prepare(
