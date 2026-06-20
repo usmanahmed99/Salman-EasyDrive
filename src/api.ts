@@ -164,6 +164,8 @@ export const adminApi = {
   deleteService: (id: string) => request(`/api/admin/services/${id}`, { method: "DELETE" }),
   serviceRequirements: (serviceId: string) =>
     request<{ requirements: Array<{ resource_type: string; units: number }> }>(`/api/admin/service-requirements?serviceId=${encodeURIComponent(serviceId)}`),
+  saveServiceRequirements: (serviceId: string, requirements: Array<{ resource_type: string; units: number }>) =>
+    request("/api/admin/service-requirements", { method: "PUT", body: JSON.stringify({ serviceId, requirements }) }),
 
   // Resources & groups
   resources: () => request<{ resources: AdminResource[] }>("/api/admin/resources"),

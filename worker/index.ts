@@ -570,6 +570,20 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json({ requirements: results.results });
     }
 
+    if (path === "/api/admin/service-requirements" && method === "PUT") {
+      const body = await readJson(request) as { serviceId: string; requirements: Array<{ resource_type: string; units: number }> };
+      if (!body.serviceId) throw new HttpError(400, "serviceId is required.");
+      const allowed = ["cars", "instructors", "seats", "generic"];
+      const valid = (body.requirements || []).filter((r) => allowed.includes(r.resource_type) && r.units > 0);
+      await env.DB.prepare("DELETE FROM service_resource_requirements WHERE service_id=?").bind(body.serviceId).run();
+      for (const req of valid) {
+        await env.DB.prepare(
+          "INSERT INTO service_resource_requirements(id, service_id, resource_type, units) VALUES(?,?,?,?)"
+        ).bind(uuid(), body.serviceId, req.resource_type, req.units).run();
+      }
+      return json({ requirements: valid });
+    }
+
     return adminCrud(request, env, path, user);
   }
 

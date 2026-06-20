@@ -660,7 +660,16 @@ function CentersScreen({ centers, bookings, groups, reload, toast }: { centers: 
 /* Services                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function ServiceModal({ service, forms, onClose, onSaved }: { service: Service | null; forms: Array<{ id: string; name: string }>; onClose: () => void; onSaved: () => void }) {
+const RESOURCE_TYPES = ["cars", "instructors", "seats", "generic"] as const;
+type ResourceType = typeof RESOURCE_TYPES[number];
+
+function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }: {
+  service: Service | null;
+  initialRequirements: Array<{ resource_type: string; units: number }>;
+  forms: Array<{ id: string; name: string }>;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const [v, setV] = useState({
     slug: service?.slug || "",
     nameEn: service?.name.en || "",
@@ -677,6 +686,11 @@ function ServiceModal({ service, forms, onClose, onSaved }: { service: Service |
     baseConcurrency: 4,
     enabled: service?.enabled ?? true
   });
+  const [reqs, setReqs] = useState<Record<ResourceType, number>>(() => {
+    const base: Record<ResourceType, number> = { cars: 0, instructors: 0, seats: 0, generic: 0 };
+    for (const r of initialRequirements) base[r.resource_type as ResourceType] = r.units;
+    return base;
+  });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
@@ -686,8 +700,16 @@ function ServiceModal({ service, forms, onClose, onSaved }: { service: Service |
     setSaving(true);
     const payload = { ...v, slug: v.slug || slugify(v.nameEn) };
     try {
-      if (service) await adminApi.updateService(service.id, payload);
-      else await adminApi.createService(payload);
+      let serviceId: string;
+      if (service) {
+        await adminApi.updateService(service.id, payload);
+        serviceId = service.id;
+      } else {
+        const created = await adminApi.createService(payload) as { id: string };
+        serviceId = created.id;
+      }
+      const requirements = RESOURCE_TYPES.filter((t) => reqs[t] > 0).map((t) => ({ resource_type: t, units: reqs[t] }));
+      await adminApi.saveServiceRequirements(serviceId, requirements);
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
@@ -723,6 +745,24 @@ function ServiceModal({ service, forms, onClose, onSaved }: { service: Service |
         <Field label="Buffer after (min)"><input className="field" type="number" value={v.bufferAfterMinutes} onChange={(event) => set("bufferAfterMinutes", Number(event.target.value))} /></Field>
         <Field label="Booking cutoff (hours)"><input className="field" type="number" value={v.cutoffHours} onChange={(event) => set("cutoffHours", Number(event.target.value))} /></Field>
         <Field label="Cancellation cutoff (hours)"><input className="field" type="number" value={v.cancellationCutoffHours} onChange={(event) => set("cancellationCutoffHours", Number(event.target.value))} /></Field>
+        <div className="sm:col-span-2">
+          <span className="label mb-2 block">Resource requirements</span>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {RESOURCE_TYPES.map((type) => (
+              <label key={type} className="block">
+                <span className="mb-1 block text-xs capitalize text-slate-500">{type}</span>
+                <input
+                  className="field"
+                  type="number"
+                  min={0}
+                  value={reqs[type]}
+                  onChange={(e) => setReqs((prev) => ({ ...prev, [type]: Math.max(0, Number(e.target.value)) }))}
+                />
+              </label>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-slate-400">Set to 0 to not require that resource type.</p>
+        </div>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
             <option value="1">Enabled</option>
@@ -787,7 +827,7 @@ function ServicesScreen({ services, forms, requirements, reload, toast }: {
           ))}
         </div>
       </div>
-      {editing && <ServiceModal service={editing === "new" ? null : editing} forms={forms} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Service saved."); reload(); }} />}
+      {editing && <ServiceModal service={editing === "new" ? null : editing} initialRequirements={editing === "new" ? [] : (requirements[editing.id] || [])} forms={forms} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Service saved."); reload(); }} />}
     </>
   );
 }
