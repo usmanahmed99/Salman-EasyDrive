@@ -3,7 +3,7 @@ import type { BookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmBooking, serviceResponse, syncBookingCalendar, type ConfirmBookingPayload } from "./booking";
-import { listCalendars } from "./google";
+import { createCalendar, listCalendars } from "./google";
 import type { DbCenter, DbService, Env } from "./types";
 import {
   assertTrustedOrigin,
@@ -94,7 +94,18 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         INSERT INTO centers(id, name, slug, address, timezone, enabled) VALUES (?, ?, ?, ?, ?, ?)
       `).bind(nextId, payload.name, payload.slug, payload.address || null, payload.timezone, Number(payload.enabled)).run();
       await audit(env, user.id, "create", "center", nextId, payload, request);
-      return json({ id: nextId, ...payload }, 201);
+      // Best-effort: auto-create a Google Calendar and link it as the canonical calendar for this center.
+      const calId = await createCalendar(env, payload.name).catch((err: unknown) => {
+        console.error("[auto-calendar] center calendar creation failed", err);
+        return null;
+      });
+      if (calId) {
+        const mappingId = uuid();
+        await env.DB.prepare(
+          "INSERT INTO calendar_mappings(id,center_id,mapping_type,mapping_id,calendar_id,event_role) VALUES(?,?,?,?,?,?)"
+        ).bind(mappingId, nextId, "center", nextId, calId, "canonical").run();
+      }
+      return json({ id: nextId, calendarId: calId ?? undefined, ...payload }, 201);
     }
     if (method === "PATCH" && id) {
       await env.DB.prepare(`
@@ -174,12 +185,20 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     const payload = resourceMutationSchema.parse(await readJson(request));
     if (method === "POST") {
       const nextId = uuid();
+      // Auto-create a Google Calendar for instructors when no calendar is manually provided.
+      let resolvedCalendarId = payload.calendarId || null;
+      if (!resolvedCalendarId && payload.type === "instructor") {
+        resolvedCalendarId = await createCalendar(env, payload.name).catch((err: unknown) => {
+          console.error("[auto-calendar] instructor calendar creation failed", err);
+          return null;
+        });
+      }
       await env.DB.prepare(`
         INSERT INTO resources(id, group_id, center_id, type, name, email, phone, calendar_id, enabled, public_visible)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, payload.groupId, payload.centerId, payload.type, payload.name, payload.email || null, payload.phone || null, payload.calendarId || null, Number(payload.enabled), Number(payload.publicVisible)).run();
-      await audit(env, user.id, "create", "resource", nextId, payload, request);
-      return json({ id: nextId, ...payload }, 201);
+      `).bind(nextId, payload.groupId, payload.centerId, payload.type, payload.name, payload.email || null, payload.phone || null, resolvedCalendarId, Number(payload.enabled), Number(payload.publicVisible)).run();
+      await audit(env, user.id, "create", "resource", nextId, { ...payload, calendarId: resolvedCalendarId }, request);
+      return json({ id: nextId, ...payload, calendarId: resolvedCalendarId }, 201);
     }
     if (method === "PATCH" && id) {
       await env.DB.prepare(`
@@ -250,7 +269,7 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/auth/config" && method === "GET") {
     return json({ google: Boolean(env.GOOGLE_CLIENT_ID), devLogin: devLoginAvailable(env) });
   }
-  if (path === "/api/auth/google/start" && (method === "GET" || method === "POST")) return handleGoogleStart(env);
+  if (path === "/api/auth/google/start" && (method === "GET" || method === "POST")) return handleGoogleStart(env, "login");
   if (path === "/api/auth/google/callback" && method === "GET") return handleGoogleCallback(request, env);
   if (path === "/api/auth/dev-login" && method === "POST") {
     assertTrustedOrigin(request, env);
@@ -414,7 +433,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const results = await env.DB.prepare("SELECT id, google_email, scopes, status, last_error, updated_at FROM google_connections").all();
       return json({ connections: results.results });
     }
-    if (path === "/api/admin/calendar/connect" && method === "POST") return handleGoogleStart(env);
+    if (path === "/api/admin/calendar/connect" && method === "POST") return handleGoogleStart(env, "calendar");
     if (path === "/api/admin/calendar/list" && method === "GET") return json({ calendars: await listCalendars(env) });
     if (path === "/api/admin/calendar/template") {
       if (method === "GET") {

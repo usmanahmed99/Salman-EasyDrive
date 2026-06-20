@@ -31,6 +31,22 @@ async function accessToken(env: Env) {
   return body.access_token;
 }
 
+export async function createCalendar(env: Env, summary: string): Promise<string | null> {
+  const token = await accessToken(env);
+  if (!token) return null;
+  const response = await fetch("https://www.googleapis.com/calendar/v3/calendars", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ summary })
+  });
+  const body = await response.json() as { id?: string; error?: { message?: string } };
+  if (!response.ok || !body.id) {
+    console.error("[google] createCalendar failed", response.status, JSON.stringify(body.error));
+    return null;
+  }
+  return body.id;
+}
+
 export async function listCalendars(env: Env) {
   const token = await accessToken(env);
   if (!token) return [];

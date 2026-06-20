@@ -24,7 +24,17 @@ export async function requireUser(request: Request, env: Env) {
   return user;
 }
 
-export function googleAuthorizationUrl(env: Env, state: string) {
+const LOGIN_SCOPES = ["openid", "email", "profile"];
+const CALENDAR_SCOPES = [
+  "openid",
+  "email",
+  "profile",
+  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+  "https://www.googleapis.com/auth/calendar.freebusy",
+  "https://www.googleapis.com/auth/calendar.events"
+];
+
+export function googleAuthorizationUrl(env: Env, state: string, purpose: "login" | "calendar") {
   const params = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
     redirect_uri: env.GOOGLE_REDIRECT_URI,
@@ -33,27 +43,22 @@ export function googleAuthorizationUrl(env: Env, state: string) {
     prompt: "consent",
     include_granted_scopes: "true",
     state,
-    scope: [
-      "openid",
-      "email",
-      "profile",
-      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-      "https://www.googleapis.com/auth/calendar.freebusy",
-      "https://www.googleapis.com/auth/calendar.events"
-    ].join(" ")
+    scope: (purpose === "calendar" ? CALENDAR_SCOPES : LOGIN_SCOPES).join(" ")
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
 
-export async function handleGoogleStart(env: Env) {
+export async function handleGoogleStart(env: Env, purpose: "login" | "calendar" = "login") {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
     throw new HttpError(503, "Google OAuth is not configured.", "oauth_not_configured");
   }
-  const state = randomToken(24);
+  // Encode the purpose into the state value so the callback can read it without
+  // an extra cookie. Format: "<purpose>:<randomToken>"
+  const state = `${purpose}:${randomToken(24)}`;
   return new Response(null, {
     status: 302,
     headers: {
-      Location: googleAuthorizationUrl(env, state),
+      Location: googleAuthorizationUrl(env, state, purpose),
       "Set-Cookie": cookie("eds_oauth_state", state, { maxAge: 600, sameSite: "Lax" })
     }
   });
@@ -67,6 +72,11 @@ export async function handleGoogleCallback(request: Request, env: Env) {
   if (!code || !state || !expectedState || state !== expectedState) {
     throw new HttpError(400, "OAuth state validation failed.", "invalid_oauth_state");
   }
+
+  // State format is "<purpose>:<token>". Fall back to "login" for legacy states
+  // that predate this format (no colon separator).
+  const colonIdx = state.indexOf(":");
+  const purpose = colonIdx > 0 ? state.slice(0, colonIdx) : "login";
 
   const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
@@ -109,7 +119,10 @@ export async function handleGoogleCallback(request: Request, env: Env) {
     ON CONFLICT(email) DO UPDATE SET name = excluded.name, updated_at = CURRENT_TIMESTAMP
   `).bind(userId, profile.email.toLowerCase(), profile.name || profile.email, existing?.role || "owner").run();
 
-  if (token.refresh_token) {
+  // Only store the calendar refresh token when this was an explicit calendar-connect
+  // flow. Login-only OAuth uses minimal scopes and must never displace the system
+  // calendar connection that belongs to the designated calendar account.
+  if (purpose === "calendar" && token.refresh_token) {
     const encryptedToken = await encrypt(env.TOKEN_ENCRYPTION_KEY, token.refresh_token);
     await env.DB.prepare("DELETE FROM google_connections WHERE user_id = ?").bind(userId).run();
     await env.DB.prepare(`
