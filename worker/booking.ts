@@ -9,6 +9,7 @@ interface TemplateFields {
   center: string;
   reference: string;
   student: string;
+  price: string;
   manageUrl: string;
   visibleFields: string;
 }
@@ -164,7 +165,7 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
 
 export async function syncBookingCalendar(env: Env, bookingId: string, knownPublicToken?: string) {
   const booking = await env.DB.prepare(`
-    SELECT bookings.*, centers.name AS center_name, services.name_en, services.name_fr,
+    SELECT bookings.*, centers.name AS center_name, services.name_en, services.name_fr, services.price_display,
       booking_form_responses.response_json, booking_form_responses.student_name,
       booking_form_responses.student_email
     FROM bookings
@@ -204,6 +205,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     center: booking.center_name,
     reference: booking.reference,
     student: booking.student_name || "Private",
+    price: booking.price_display || "",
     manageUrl,
     visibleFields: visibleAnswers.join("\n")
   };

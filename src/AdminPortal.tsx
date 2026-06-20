@@ -1359,7 +1359,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
             <p className="mt-1 text-xs text-slate-500">
               Customize the title and description of created calendar events (and the student's invite email).
               Leave a field blank to use the built-in default. Placeholders:
-              <span className="font-mono"> {"{service} {center} {reference} {student} {manageUrl} {visibleFields}"}</span>
+              <span className="font-mono"> {"{service} {center} {reference} {student} {price} {manageUrl} {visibleFields}"}</span>
             </p>
           </div>
           <div className="space-y-4 p-5">
