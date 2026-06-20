@@ -69,6 +69,31 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
   });
   if (!aligned) throw new HttpError(400, "Please choose a listed time slot.", "invalid_slot");
 
+  // Hard DB-level guard: verify no named resource in the planned allocation is
+  // already taken by an overlapping confirmed booking. This runs inside the
+  // Durable Object's serialized execution so it sees all committed allocations.
+  const end = addMinutes(payload.start, context.service.duration_minutes);
+  const operationalStart = addMinutes(payload.start, -context.service.buffer_before_minutes);
+  const operationalEnd = addMinutes(end, context.service.buffer_after_minutes);
+  for (const [groupId, allocation] of Object.entries(context.slot.allocations)) {
+    if (!Array.isArray(allocation) || allocation.length === 0) continue;
+    for (const resourceId of allocation) {
+      const conflict = await env.DB.prepare(`
+        SELECT booking_resource_allocations.id FROM booking_resource_allocations
+        JOIN bookings ON bookings.id = booking_resource_allocations.booking_id
+        WHERE booking_resource_allocations.resource_id = ?
+          AND booking_resource_allocations.resource_group_id = ?
+          AND booking_resource_allocations.start_at < ?
+          AND booking_resource_allocations.end_at > ?
+          AND bookings.status IN ('confirmed', 'pending_confirmation', 'calendar_sync_failed')
+        LIMIT 1
+      `).bind(resourceId, groupId, operationalEnd, operationalStart).first();
+      if (conflict) {
+        throw new HttpError(409, "That time was just booked. Please choose another slot.", "booking_conflict");
+      }
+    }
+  }
+
   const formRow = await env.DB.prepare(`
     SELECT form_versions.schema_json FROM forms
     JOIN form_versions ON form_versions.form_id = forms.id AND form_versions.version = forms.active_version
@@ -85,9 +110,6 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
   const reference = `ED-${Math.floor(100000 + Math.random() * 900000)}`;
   const publicToken = randomToken(32);
   const tokenHash = await sha256(publicToken);
-  const end = addMinutes(payload.start, context.service.duration_minutes);
-  const operationalStart = addMinutes(payload.start, -context.service.buffer_before_minutes);
-  const operationalEnd = addMinutes(end, context.service.buffer_after_minutes);
   const studentName = String(payload.answers.fullName || "");
   const studentEmail = String(payload.answers.email || "");
   const studentPhone = String(payload.answers.phone || "");
