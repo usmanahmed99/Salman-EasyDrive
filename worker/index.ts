@@ -439,7 +439,7 @@ async function route(request: Request, env: Env): Promise<Response> {
       const results = await env.DB.prepare("SELECT id, google_email, scopes, status, last_error, updated_at FROM google_connections").all();
       return json({ connections: results.results });
     }
-    if (path === "/api/admin/calendar/connect" && method === "POST") return handleGoogleStart(env, "calendar");
+    if (path === "/api/admin/calendar/connect" && (method === "POST" || method === "GET")) return handleGoogleStart(env, "calendar");
     if (path === "/api/admin/calendar/list" && method === "GET") return json({ calendars: await listCalendars(env) });
     if (path === "/api/admin/calendar/template") {
       if (method === "GET") {
