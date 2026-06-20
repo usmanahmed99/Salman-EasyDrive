@@ -95,7 +95,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       `).bind(nextId, payload.name, payload.slug, payload.address || null, payload.timezone, Number(payload.enabled)).run();
       await audit(env, user.id, "create", "center", nextId, payload, request);
       // Best-effort: auto-create a Google Calendar and link it as the canonical calendar for this center.
-      const calId = await createCalendar(env, payload.name).catch((err: unknown) => {
+      const calId = await createCalendar(env, `Easy Driving - Center ${payload.name}`).catch((err: unknown) => {
         console.error("[auto-calendar] center calendar creation failed", err);
         return null;
       });
@@ -198,7 +198,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       // Auto-create a Google Calendar for instructors when no calendar is manually provided.
       let resolvedCalendarId = payload.calendarId || null;
       if (!resolvedCalendarId && payload.type === "instructor") {
-        resolvedCalendarId = await createCalendar(env, payload.name).catch((err: unknown) => {
+        resolvedCalendarId = await createCalendar(env, `Easy Driving - Instructor ${payload.name}`).catch((err: unknown) => {
           console.error("[auto-calendar] instructor calendar creation failed", err);
           return null;
         });
