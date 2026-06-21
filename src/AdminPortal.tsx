@@ -70,7 +70,9 @@ interface AdminBooking {
   booked_at: string;
   student: string;
   service: string;
+  serviceSlug?: string;
   center: string;
+  centerSlug?: string;
   status: string;
   calendarLastError?: string;
 }
@@ -711,12 +713,113 @@ function NewBookingModal({ centers, services, onClose, onBooked }: {
             {enabledServices.map((s) => <option key={s.id} value={s.slug}>{s.name.en}</option>)}
           </select>
         </Field>
-        <Field label="Date & time (center local time)"><input className="field" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></Field>
         <Field label="Student name"><input className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" /></Field>
         <Field label="Email (optional)"><input className="field" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field>
         <Field label="Phone (optional)"><input className="field" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(514) 555-0123" /></Field>
       </div>
+      <div className="mt-5">
+        <span className="label">Date &amp; time (center local time)</span>
+        <AvailabilityPicker centerSlug={centerSlug} serviceSlug={serviceSlug} timezone={timezone} value={when} onChange={setWhen} />
+      </div>
     </Modal>
+  );
+}
+
+interface QuickSlot { start: string; end: string; available: boolean; reasons: string[] }
+
+// A blocking reason is one an admin cannot override (a real resource conflict or
+// exhausted capacity). Cutoffs/hours/closures are overridable, mirroring the worker.
+const ADMIN_OVERRIDABLE_REASONS = new Set([
+  "outside_business_hours", "outside_service_hours", "cutoff_exceeded",
+  "center_closed", "service_closed", "service_capacity_full"
+]);
+function slotIsBlocked(slot: QuickSlot) {
+  return slot.reasons.some((reason) => !ADMIN_OVERRIDABLE_REASONS.has(reason));
+}
+
+/**
+ * Shared time + availability picker for rescheduling and ad-hoc booking. Shows a
+ * day's slots from the admin (debug) availability so cutoff/closed slots remain
+ * visible and bookable (admin override), while genuine resource conflicts are
+ * disabled. A manual datetime field stays available for off-grid times.
+ */
+function AvailabilityPicker({ centerSlug, serviceSlug, timezone, value, onChange }: {
+  centerSlug?: string;
+  serviceSlug?: string;
+  timezone: string;
+  value: string;            // "YYYY-MM-DDTHH:mm" wall-clock in `timezone`
+  onChange: (next: string) => void;
+}) {
+  const [day, setDay] = useState(() => (value ? value.slice(0, 10) : montrealToday()));
+  const [slots, setSlots] = useState<QuickSlot[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState("");
+
+  useEffect(() => {
+    if (!centerSlug || !serviceSlug || !day) { setSlots(null); return; }
+    let cancelled = false;
+    setLoading(true);
+    setLoadError("");
+    adminApi.availabilityDebug(centerSlug, serviceSlug, day)
+      .then((result) => { if (!cancelled) setSlots(result.slots); })
+      .catch((err) => { if (!cancelled) { setSlots([]); setLoadError(errorMessage(err)); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [centerSlug, serviceSlug, day]);
+
+  const fmtTime = (iso: string) => new Intl.DateTimeFormat("en-CA", {
+    hour: "numeric", minute: "2-digit", timeZone: timezone
+  }).format(new Date(iso));
+
+  return (
+    <div>
+      <div className="flex items-end gap-3">
+        <Field label="Day"><input className="field" type="date" value={day} onChange={(e) => setDay(e.target.value)} /></Field>
+        <p className="pb-3 text-xs text-slate-500">{loading ? "Loading times…" : slots ? `${slots.filter((s) => !slotIsBlocked(s)).length} bookable` : ""}</p>
+      </div>
+      {loadError && <p className="mt-1 text-xs font-semibold text-red-600">{loadError}</p>}
+      {slots && slots.length > 0 && (
+        <div className="mt-2 grid max-h-52 grid-cols-3 gap-2 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50/60 p-3 sm:grid-cols-4">
+          {slots.map((slot) => {
+            const blocked = slotIsBlocked(slot);
+            const overridden = !slot.available && !blocked; // cutoff/hours only
+            const selected = value === isoToLocalInput(slot.start, timezone);
+            return (
+              <button
+                key={slot.start}
+                type="button"
+                disabled={blocked}
+                title={blocked ? `Unavailable: ${slot.reasons.join(", ")}` : overridden ? `Override: ${slot.reasons.join(", ")}` : "Available"}
+                onClick={() => onChange(isoToLocalInput(slot.start, timezone))}
+                className={clsx(
+                  "rounded-lg border px-2 py-2 text-xs font-bold transition",
+                  selected && "border-brand-600 bg-brand-600 text-white",
+                  !selected && blocked && "cursor-not-allowed border-slate-200 bg-slate-100 text-slate-300 line-through",
+                  !selected && !blocked && overridden && "border-amber-200 bg-amber-50 text-amber-700 hover:border-amber-400",
+                  !selected && slot.available && "border-slate-200 bg-white text-ink hover:border-brand-400 hover:bg-brand-50"
+                )}
+              >
+                {fmtTime(slot.start)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {slots && slots.length === 0 && !loading && (
+        <p className="mt-2 rounded-xl border border-slate-100 bg-slate-50 p-3 text-xs text-slate-500">No slots are defined for this day (the center may be closed). Use the exact time field below to override.</p>
+      )}
+      <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400">
+        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-white ring-1 ring-slate-300" /> Available</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-amber-200" /> Override (cutoff/hours)</span>
+        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-sm bg-slate-200" /> Resource conflict</span>
+      </p>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold text-slate-500 hover:text-ink">Or enter an exact time</summary>
+        <div className="mt-2">
+          <input className="field" type="datetime-local" value={value} onChange={(e) => onChange(e.target.value)} />
+        </div>
+      </details>
+    </div>
   );
 }
 
@@ -756,9 +859,15 @@ function RescheduleModal({ booking, centers, onClose, onRescheduled }: {
       </>}
     >
       {error && <Banner kind="error" message={error} onClose={() => setError("")} />}
-      <p className="mb-4 text-sm text-slate-600"><span className="font-semibold text-ink">{booking.student}</span> · {booking.service} · {booking.center}</p>
-      <p className="mb-4 text-xs text-slate-500">Cutoffs and opening hours are overridden; the move is blocked only if the required instructor or car is already booked at the new time. The student's calendar invite is updated.</p>
-      <Field label="New date & time (center local time)"><input className="field" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></Field>
+      <p className="mb-3 text-sm text-slate-600"><span className="font-semibold text-ink">{booking.student}</span> · {booking.service} · {booking.center}</p>
+      <p className="mb-4 text-xs text-slate-500">Pick a time below — amber slots override cutoffs/hours; greyed slots have a resource conflict and can't be booked. The student's calendar invite is updated.</p>
+      <AvailabilityPicker
+        centerSlug={booking.centerSlug}
+        serviceSlug={booking.serviceSlug}
+        timezone={timezone}
+        value={when}
+        onChange={setWhen}
+      />
     </Modal>
   );
 }
@@ -2369,7 +2478,9 @@ export default function AdminPortal() {
     booked_at: booking.booked_at || "",
     student: booking.student || "Private",
     service: booking.service,
+    serviceSlug: booking.service_slug || undefined,
     center: booking.center,
+    centerSlug: booking.center_slug || undefined,
     status: booking.status,
     start_at: booking.start_at,
     calendarLastError: booking.calendar_last_error || undefined

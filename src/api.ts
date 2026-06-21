@@ -223,6 +223,9 @@ export const adminApi = {
   rescheduleBooking: (id: string, start: string) =>
     request<{ id: string; reference: string; status: string; start: string; calendarSyncStatus: string }>(
       `/api/admin/bookings/${id}/reschedule`, { method: "POST", body: JSON.stringify({ start }) }),
+  availabilityDebug: (centerSlug: string, serviceSlug: string, date: string) =>
+    request<{ slots: Array<{ start: string; end: string; available: boolean; capacityRemaining: number; reasons: string[] }> }>(
+      "/api/admin/debug/availability", { method: "POST", body: JSON.stringify({ centerSlug, serviceSlug, dateFrom: date }) }),
   resyncBooking: (id: string) => request(`/api/admin/bookings/${id}/resync-calendar`, { method: "POST" }),
   cancelBooking: (id: string) => request(`/api/admin/bookings/${id}/cancel`, { method: "POST" }),
   reconcileBookings: () => request<{ checked: number; cleaned: number; skipped: number }>("/api/admin/bookings/reconcile", { method: "POST" })

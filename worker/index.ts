@@ -477,7 +477,8 @@ async function route(request: Request, env: Env): Promise<Response> {
       const results = await env.DB.prepare(`
         SELECT bookings.id, bookings.reference, bookings.start_at, bookings.created_at, bookings.status,
           bookings.calendar_last_error,
-          services.name_en AS service, centers.name AS center,
+          services.name_en AS service, services.slug AS service_slug,
+          centers.name AS center, centers.slug AS center_slug,
           COALESCE(booking_form_responses.student_name, 'Private') AS student
         FROM bookings JOIN services ON services.id=bookings.service_id
         JOIN centers ON centers.id=bookings.center_id
