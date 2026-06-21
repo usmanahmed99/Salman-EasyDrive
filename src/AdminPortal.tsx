@@ -627,7 +627,7 @@ function CenterModal({ center, onClose, onSaved }: { center: Center | null; onCl
   );
 }
 
-function CentersScreen({ centers, bookings, groups, reload, toast }: { centers: Center[]; bookings: AdminBooking[]; groups: ResourceGroup[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
+function CentersScreen({ centers, bookings, groups, resources, reload, toast }: { centers: Center[]; bookings: AdminBooking[]; groups: ResourceGroup[]; resources: AdminResource[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
   const [editing, setEditing] = useState<Center | null | "new">(null);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -647,7 +647,9 @@ function CentersScreen({ centers, bookings, groups, reload, toast }: { centers: 
       <div className="grid gap-4 lg:grid-cols-3">
         {centers.map((center) => {
           const todays = bookings.filter((booking) => booking.center === center.name && bookingDate(booking) === today).length;
-          const resourceCount = groups.filter((group) => group.center_id === center.id).reduce((sum, group) => sum + (group.type === "instructors" ? group.member_count : group.capacity), 0);
+          const centerGroups = groups.filter((group) => group.center_id === center.id);
+          const instructorCount = resources.filter((r) => r.type === "instructor" && centerGroups.some((g) => g.id === r.group_id)).length;
+          const carCapacity = centerGroups.filter((g) => g.type === "cars").reduce((sum, g) => sum + g.capacity, 0);
           return (
             <div className="card p-5" key={center.id}>
               <div className="flex items-start justify-between">
@@ -656,9 +658,10 @@ function CentersScreen({ centers, bookings, groups, reload, toast }: { centers: 
               </div>
               <h3 className="mt-4 text-lg font-extrabold text-ink">{center.name}</h3>
               <p className="mt-1 min-h-10 text-xs leading-5 text-slate-500">{center.address || "No address set"}</p>
-              <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-100 pt-4 text-xs">
+              <div className="mt-4 grid grid-cols-3 gap-2 border-t border-slate-100 pt-4 text-xs">
                 <div><p className="text-slate-400">Today</p><p className="mt-1 font-extrabold text-ink">{todays} bookings</p></div>
-                <div><p className="text-slate-400">Resources</p><p className="mt-1 font-extrabold text-ink">{resourceCount} units</p></div>
+                <div><p className="text-slate-400">Instructors</p><p className="mt-1 font-extrabold text-ink">{instructorCount}</p></div>
+                <div><p className="text-slate-400">Cars</p><p className="mt-1 font-extrabold text-ink">{carCapacity}</p></div>
               </div>
               <div className="mt-5 flex gap-2">
                 <button className="secondary-button flex-1 min-h-10 py-2" onClick={() => setEditing(center)}>Edit</button>
@@ -683,9 +686,11 @@ function CentersScreen({ centers, bookings, groups, reload, toast }: { centers: 
 const RESOURCE_TYPES = ["cars", "instructors", "seats", "generic"] as const;
 type ResourceType = typeof RESOURCE_TYPES[number];
 
-function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }: {
+function ServiceModal({ service, initialRequirements, initialCenterIds, centers, forms, onClose, onSaved }: {
   service: Service | null;
   initialRequirements: Array<{ resource_type: string; units: number }>;
+  initialCenterIds: string[];
+  centers: Center[];
   forms: Array<{ id: string; name: string }>;
   onClose: () => void;
   onSaved: () => void;
@@ -699,11 +704,13 @@ function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }:
     durationMinutes: service?.durationMinutes ?? 60,
     bufferBeforeMinutes: service?.bufferBeforeMinutes ?? 10,
     bufferAfterMinutes: service?.bufferAfterMinutes ?? 10,
+    slotIntervalMinutes: service?.slotIntervalMinutes ?? 30,
     priceDisplay: service?.priceDisplay || "",
     formId: service?.formId || forms[0]?.id || "form_lesson",
     cutoffHours: service?.cutoffHours ?? 2,
     cancellationCutoffHours: service?.cancellationCutoffHours ?? 12,
     baseConcurrency: 4,
+    showDuration: service?.showDuration ?? true,
     enabled: service?.enabled ?? true
   });
   const [reqs, setReqs] = useState<Record<ResourceType, number>>(() => {
@@ -711,9 +718,13 @@ function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }:
     for (const r of initialRequirements) base[r.resource_type as ResourceType] = r.units;
     return base;
   });
+  const [centerIds, setCenterIds] = useState<string[]>(initialCenterIds);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
+
+  const toggleCenter = (id: string) =>
+    setCenterIds((prev) => prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]);
 
   const save = async () => {
     setError("");
@@ -729,7 +740,10 @@ function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }:
         serviceId = created.id;
       }
       const requirements = RESOURCE_TYPES.filter((t) => reqs[t] > 0).map((t) => ({ resource_type: t, units: reqs[t] }));
-      await adminApi.saveServiceRequirements(serviceId, requirements);
+      await Promise.all([
+        adminApi.saveServiceRequirements(serviceId, requirements),
+        adminApi.saveServiceCenters(serviceId, centerIds)
+      ]);
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
@@ -765,6 +779,20 @@ function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }:
         <Field label="Buffer after (min)"><input className="field" type="number" value={v.bufferAfterMinutes} onChange={(event) => set("bufferAfterMinutes", Number(event.target.value))} /></Field>
         <Field label="Booking cutoff (hours)"><input className="field" type="number" value={v.cutoffHours} onChange={(event) => set("cutoffHours", Number(event.target.value))} /></Field>
         <Field label="Cancellation cutoff (hours)"><input className="field" type="number" value={v.cancellationCutoffHours} onChange={(event) => set("cancellationCutoffHours", Number(event.target.value))} /></Field>
+        <Field label="Slot interval">
+          <select className="field" value={v.slotIntervalMinutes} onChange={(event) => set("slotIntervalMinutes", Number(event.target.value))}>
+            <option value={15}>Every 15 minutes</option>
+            <option value={30}>Every 30 minutes</option>
+            <option value={60}>Every hour</option>
+            <option value={120}>Every 2 hours</option>
+          </select>
+        </Field>
+        <Field label="Show duration in booking">
+          <select className="field" value={v.showDuration ? "1" : "0"} onChange={(event) => set("showDuration", event.target.value === "1")}>
+            <option value="1">Show duration</option>
+            <option value="0">Hide duration</option>
+          </select>
+        </Field>
         <div className="sm:col-span-2">
           <span className="label mb-2 block">Resource requirements</span>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -783,6 +811,23 @@ function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }:
           </div>
           <p className="mt-1.5 text-xs text-slate-400">Set to 0 to not require that resource type.</p>
         </div>
+        <div className="sm:col-span-2">
+          <span className="label mb-2 block">Available at centers</span>
+          <div className="flex flex-wrap gap-3">
+            {centers.map((center) => (
+              <label key={center.id} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={centerIds.includes(center.id)}
+                  onChange={() => toggleCenter(center.id)}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                />
+                <span className="text-sm text-slate-700">{center.name}</span>
+              </label>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-slate-400">Uncheck a center to hide this service there. Uncheck all to make it available at every center.</p>
+        </div>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
             <option value="1">Enabled</option>
@@ -794,14 +839,26 @@ function ServiceModal({ service, initialRequirements, forms, onClose, onSaved }:
   );
 }
 
-function ServicesScreen({ services, forms, requirements, reload, toast }: {
+function ServicesScreen({ services, centers, forms, requirements, reload, toast }: {
   services: Service[];
+  centers: Center[];
   forms: Array<{ id: string; name: string }>;
   requirements: Record<string, Array<{ resource_type: string; units: number }>>;
   reload: () => void;
   toast: ReturnType<typeof useToast>;
 }) {
   const [editing, setEditing] = useState<Service | null | "new">(null);
+  const [serviceCenterIds, setServiceCenterIds] = useState<Record<string, string[]>>({});
+
+  const loadCenterIds = async (serviceId: string) => {
+    if (serviceCenterIds[serviceId] !== undefined) return;
+    try {
+      const result = await adminApi.serviceCenters(serviceId);
+      setServiceCenterIds((prev) => ({ ...prev, [serviceId]: result.centerIds }));
+    } catch {
+      setServiceCenterIds((prev) => ({ ...prev, [serviceId]: [] }));
+    }
+  };
 
   const remove = async (service: Service) => {
     if (!confirm(`Disable ${service.name.en}?`)) return;
@@ -828,26 +885,47 @@ function ServicesScreen({ services, forms, requirements, reload, toast }: {
           <button className="primary-button min-h-10 px-4 py-2" onClick={() => setEditing("new")}><Plus size={16} /> Add service</button>
         </div>
         <div className="divide-y divide-slate-100">
-          {services.map((service) => (
-            <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center" key={service.id}>
-              <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600"><Gauge size={21} /></div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <p className="font-extrabold text-ink">{service.name.en}</p>
-                  <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", service.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{service.enabled ? "Enabled" : "Disabled"}</span>
+          {services.map((service) => {
+            const assignedCenters = (serviceCenterIds[service.id] || [])
+              .map((cid) => centers.find((c) => c.id === cid)?.name)
+              .filter(Boolean);
+            return (
+              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center" key={service.id}>
+                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600"><Gauge size={21} /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-extrabold text-ink">{service.name.en}</p>
+                    <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", service.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{service.enabled ? "Enabled" : "Disabled"}</span>
+                  </div>
+                  <p className="mt-1 truncate text-xs text-slate-500">{service.durationMinutes} min · {service.priceDisplay || "no price"} · {service.slug}</p>
+                  {assignedCenters.length > 0 && (
+                    <p className="mt-1 text-xs text-slate-400">{assignedCenters.join(" · ")}</p>
+                  )}
                 </div>
-                <p className="mt-1 truncate text-xs text-slate-500">{service.durationMinutes} min · {service.priceDisplay || "no price"} · {service.slug}</p>
+                <div className="flex items-center gap-5 text-xs">
+                  <div><p className="text-slate-400">Requires</p><p className="mt-1 font-bold capitalize text-ink">{requirementLabel(service.id)}</p></div>
+                  <button className="secondary-button min-h-10 px-4 py-2" onClick={() => { loadCenterIds(service.id); setEditing(service); }}>Edit</button>
+                  <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(service)}><Trash2 size={15} /></button>
+                </div>
               </div>
-              <div className="flex items-center gap-5 text-xs">
-                <div><p className="text-slate-400">Requires</p><p className="mt-1 font-bold capitalize text-ink">{requirementLabel(service.id)}</p></div>
-                <button className="secondary-button min-h-10 px-4 py-2" onClick={() => setEditing(service)}>Edit</button>
-                <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(service)}><Trash2 size={15} /></button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
-      {editing && <ServiceModal service={editing === "new" ? null : editing} initialRequirements={editing === "new" ? [] : (requirements[editing.id] || [])} forms={forms} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Service saved."); reload(); }} />}
+      {editing && (() => {
+        const editingService = editing === "new" ? null : editing;
+        return (
+          <ServiceModal
+            service={editingService}
+            initialRequirements={editingService ? (requirements[editingService.id] || []) : []}
+            initialCenterIds={editingService ? (serviceCenterIds[editingService.id] || []) : centers.map((c) => c.id)}
+            centers={centers}
+            forms={forms}
+            onClose={() => setEditing(null)}
+            onSaved={() => { if (editingService) setServiceCenterIds((prev) => { const next = { ...prev }; delete next[editingService.id]; return next; }); setEditing(null); toast.show("success", "Service saved."); reload(); }}
+          />
+        );
+      })()}
     </>
   );
 }
@@ -949,11 +1027,20 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
   );
 }
 
-function ResourcesScreen({ resources, groups, reload, toast }: { resources: AdminResource[]; groups: ResourceGroup[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
+function ResourcesScreen({ resources, groups, centers, reload, toast }: { resources: AdminResource[]; groups: ResourceGroup[]; centers: Center[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
   const [editing, setEditing] = useState<AdminResource | null | "new">(null);
   const [savingGroup, setSavingGroup] = useState<string | null>(null);
   const instructors = resources.filter((resource) => resource.type === "instructor");
   const carGroups = groups.filter((group) => group.type === "cars");
+  // Group instructors by center using their group's center_id.
+  const centerList = centers.length > 0 ? centers : [...new Map(groups.map((g) => [g.center_id, { id: g.center_id, name: g.center_name }])).values()];
+  const instructorsByCenter = centerList.map((center) => ({
+    center,
+    instructors: instructors.filter((r) => {
+      const grp = groups.find((g) => g.id === r.group_id);
+      return grp?.center_id === center.id;
+    })
+  })).filter((entry) => entry.instructors.length > 0);
 
   const updateCapacity = async (group: ResourceGroup, capacity: number) => {
     setSavingGroup(group.id);
@@ -986,29 +1073,55 @@ function ResourcesScreen({ resources, groups, reload, toast }: { resources: Admi
           <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">Instructors (named)</h2>
           <button className="primary-button min-h-9 px-3 py-2 text-xs" onClick={() => setEditing("new")}><Plus size={15} /> Add instructor</button>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {instructors.map((resource) => {
-            const group = groups.find((item) => item.id === resource.group_id);
-            return (
-              <div className="card p-5" key={resource.id}>
-                <div className="flex items-start justify-between">
-                  <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-50 text-amber-600"><UserRound size={21} /></div>
-                  <span className={clsx("h-2.5 w-2.5 rounded-full ring-4", resource.enabled ? "bg-emerald-500 ring-emerald-50" : "bg-slate-300 ring-slate-100")} />
+        {instructorsByCenter.length > 0 ? instructorsByCenter.map(({ center, instructors: centerInstructors }) => (
+          <div key={center.id} className="mb-6">
+            <p className="mb-2 text-xs font-semibold text-slate-400 uppercase tracking-wide">{center.name}</p>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {centerInstructors.map((resource) => (
+                <div className="card p-5" key={resource.id}>
+                  <div className="flex items-start justify-between">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-50 text-amber-600"><UserRound size={21} /></div>
+                    <span className={clsx("h-2.5 w-2.5 rounded-full ring-4", resource.enabled ? "bg-emerald-500 ring-emerald-50" : "bg-slate-300 ring-slate-100")} />
+                  </div>
+                  <h3 className="mt-4 font-extrabold text-ink">{resource.name}</h3>
+                  <p className="mt-1 text-xs text-slate-500">Instructor</p>
+                  <p className="mt-4 truncate rounded-lg bg-slate-50 p-3 font-mono text-[11px] text-slate-600">{resource.calendar_id || "No Google Calendar set"}</p>
+                  <div className="mt-4 flex gap-2">
+                    <button className="secondary-button flex-1 min-h-10 py-2" onClick={() => setEditing(resource)}>Manage</button>
+                    {resource.calendar_id && (
+                      <CopyCalendarButton calendarId={resource.calendar_id} />
+                    )}
+                    <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(resource)}><Trash2 size={15} /></button>
+                  </div>
                 </div>
-                <h3 className="mt-4 font-extrabold text-ink">{resource.name}</h3>
-                <p className="mt-1 text-xs text-slate-500">Instructor · {group?.center_name}</p>
-                <p className="mt-4 truncate rounded-lg bg-slate-50 p-3 font-mono text-[11px] text-slate-600">{resource.calendar_id || "No Google Calendar set"}</p>
-                <div className="mt-4 flex gap-2">
-                  <button className="secondary-button flex-1 min-h-10 py-2" onClick={() => setEditing(resource)}>Manage</button>
-                  {resource.calendar_id && (
-                    <CopyCalendarButton calendarId={resource.calendar_id} />
-                  )}
-                  <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(resource)}><Trash2 size={15} /></button>
+              ))}
+            </div>
+          </div>
+        )) : (
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {instructors.map((resource) => {
+              const group = groups.find((item) => item.id === resource.group_id);
+              return (
+                <div className="card p-5" key={resource.id}>
+                  <div className="flex items-start justify-between">
+                    <div className="grid h-11 w-11 place-items-center rounded-xl bg-amber-50 text-amber-600"><UserRound size={21} /></div>
+                    <span className={clsx("h-2.5 w-2.5 rounded-full ring-4", resource.enabled ? "bg-emerald-500 ring-emerald-50" : "bg-slate-300 ring-slate-100")} />
+                  </div>
+                  <h3 className="mt-4 font-extrabold text-ink">{resource.name}</h3>
+                  <p className="mt-1 text-xs text-slate-500">Instructor · {group?.center_name}</p>
+                  <p className="mt-4 truncate rounded-lg bg-slate-50 p-3 font-mono text-[11px] text-slate-600">{resource.calendar_id || "No Google Calendar set"}</p>
+                  <div className="mt-4 flex gap-2">
+                    <button className="secondary-button flex-1 min-h-10 py-2" onClick={() => setEditing(resource)}>Manage</button>
+                    {resource.calendar_id && (
+                      <CopyCalendarButton calendarId={resource.calendar_id} />
+                    )}
+                    <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(resource)}><Trash2 size={15} /></button>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section>
@@ -1049,40 +1162,44 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // School closures state
+  // School closures state — shows all centers' closures
   const [closures, setClosures] = useState<Array<Record<string, string>>>([]);
   const [closureStart, setClosureStart] = useState("");
   const [closureEnd, setClosureEnd] = useState("");
   const [closureReason, setClosureReason] = useState("");
+  const [closureCenterIds, setClosureCenterIds] = useState<string[]>([]);
   const [addingClosure, setAddingClosure] = useState(false);
 
   useEffect(() => { if (!centerId && centers[0]) setCenterId(centers[0].id); }, [centers, centerId]);
+  // Default closure centers to all centers when centers load
+  useEffect(() => { if (centers.length && closureCenterIds.length === 0) setClosureCenterIds(centers.map((c) => c.id)); }, [centers]);
 
-  const loadClosures = useCallback((cid: string) => {
+  const loadClosures = useCallback(() => {
     adminApi.overrides().then((result) => {
-      setClosures(result.overrides.filter((o) => o.type === "center_closed" && o.center_id === cid));
+      setClosures(result.overrides.filter((o) => o.type === "center_closed"));
     }).catch(() => undefined);
   }, []);
 
-  useEffect(() => { if (centerId) loadClosures(centerId); }, [centerId, loadClosures]);
+  useEffect(() => { loadClosures(); }, [loadClosures]);
 
   const addClosure = async () => {
     if (!closureStart || !closureEnd) { toast.show("error", "Select a start and end date."); return; }
     if (closureEnd < closureStart) { toast.show("error", "End date must be after start date."); return; }
+    if (closureCenterIds.length === 0) { toast.show("error", "Select at least one center."); return; }
     setAddingClosure(true);
     try {
-      await adminApi.createOverride({
-        centerId,
+      await Promise.all(closureCenterIds.map((cid) => adminApi.createOverride({
+        centerId: cid,
         type: "center_closed",
         startAt: new Date(`${closureStart}T00:00:00`).toISOString(),
         endAt: new Date(`${closureEnd}T23:59:59`).toISOString(),
         reason: closureReason || undefined
-      });
+      })));
       setClosureStart("");
       setClosureEnd("");
       setClosureReason("");
-      loadClosures(centerId);
-      toast.show("success", "Closure added.");
+      loadClosures();
+      toast.show("success", `Closure added for ${closureCenterIds.length === centers.length ? "all centers" : `${closureCenterIds.length} center(s)`}.`);
     } catch (err) {
       toast.show("error", errorMessage(err));
     } finally {
@@ -1099,6 +1216,12 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
       toast.show("error", errorMessage(err));
     }
   };
+
+  const toggleClosureCenter = (id: string) =>
+    setClosureCenterIds((prev) => prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]);
+
+  const toggleAllClosureCenters = () =>
+    setClosureCenterIds((prev) => prev.length === centers.length ? [] : centers.map((c) => c.id));
 
   useEffect(() => {
     if (!centerId) return;
@@ -1163,27 +1286,28 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
       </div>
 
       <div className="card overflow-hidden">
-        <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="font-extrabold text-ink">School closures</h2>
-            <p className="mt-1 text-xs text-slate-500">Block entire date ranges — no availability will be shown to students during these periods.</p>
-          </div>
-          <p className="text-sm font-semibold text-slate-500">{centers.find((c) => c.id === centerId)?.name}</p>
+        <div className="border-b border-slate-100 p-5">
+          <h2 className="font-extrabold text-ink">School closures</h2>
+          <p className="mt-1 text-xs text-slate-500">Block entire date ranges across one or more centers — no availability will be shown to students during these periods.</p>
         </div>
 
         <div className="divide-y divide-slate-100">
           {closures.length === 0 && (
-            <p className="px-5 py-6 text-center text-sm text-slate-400">No closures scheduled for this center.</p>
+            <p className="px-5 py-6 text-center text-sm text-slate-400">No closures scheduled.</p>
           )}
           {closures.map((closure) => {
             const start = new Date(closure.start_at);
             const end = new Date(closure.end_at);
             const fmt = (d: Date) => d.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" });
             const isSameDay = start.toDateString() === end.toDateString();
+            const centerName = centers.find((c) => c.id === closure.center_id)?.name;
             return (
               <div className="flex items-center gap-4 px-5 py-4" key={closure.id}>
                 <div className="flex-1">
-                  <p className="text-sm font-bold text-ink">{isSameDay ? fmt(start) : `${fmt(start)} – ${fmt(end)}`}</p>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-sm font-bold text-ink">{isSameDay ? fmt(start) : `${fmt(start)} – ${fmt(end)}`}</p>
+                    {centerName && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">{centerName}</span>}
+                  </div>
                   {closure.reason && <p className="mt-0.5 text-xs text-slate-500">{closure.reason}</p>}
                 </div>
                 <button className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => removeClosure(closure.id)}><Trash2 size={15} /></button>
@@ -1194,6 +1318,25 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
 
         <div className="border-t border-slate-100 p-5">
           <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Add closure</p>
+          <div className="mb-3">
+            <p className="label mb-1.5">Apply to centers</p>
+            <div className="flex flex-wrap gap-3">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                  checked={closureCenterIds.length === centers.length}
+                  onChange={toggleAllClosureCenters} />
+                <span className="text-sm font-semibold text-slate-700">All centers</span>
+              </label>
+              {centers.map((center) => (
+                <label key={center.id} className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                    checked={closureCenterIds.includes(center.id)}
+                    onChange={() => toggleClosureCenter(center.id)} />
+                  <span className="text-sm text-slate-700">{center.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
           <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
             <div>
               <label className="label">From</label>
@@ -1208,7 +1351,7 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
               <input className="field" placeholder="e.g. Spring break" value={closureReason} onChange={(e) => setClosureReason(e.target.value)} />
             </div>
             <div className="flex items-end">
-              <button className="primary-button w-full" disabled={addingClosure || !closureStart || !closureEnd} onClick={addClosure}>
+              <button className="primary-button w-full" disabled={addingClosure || !closureStart || !closureEnd || closureCenterIds.length === 0} onClick={addClosure}>
                 {addingClosure ? <LoaderCircle className="animate-spin" size={16} /> : <Plus size={16} />} Add
               </button>
             </div>
@@ -1870,9 +2013,9 @@ export default function AdminPortal() {
     if (dataLoading) return <ScreenSkeleton />;
     if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} openSection={openSection} />;
     if (section === "bookings") return <BookingsScreen bookings={bookings} onResync={onResync} onCancel={onCancel} />;
-    if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} reload={loadAll} toast={toast} />;
-    if (section === "services") return <ServicesScreen services={services} forms={forms} requirements={requirements} reload={loadAll} toast={toast} />;
-    if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} reload={loadAll} toast={toast} />;
+    if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
+    if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={loadAll} toast={toast} />;
+    if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} centers={centers} reload={loadAll} toast={toast} />;
     if (section === "availability") return <AvailabilityScreen centers={centers} services={services} groups={groups} toast={toast} />;
     if (section === "forms") return <FormBuilderScreen forms={forms} reload={loadAll} toast={toast} />;
     if (section === "calendar") return <CalendarScreen centers={centers} services={services} resources={resources} mappings={mappings} connections={connections} reload={loadAll} toast={toast} />;

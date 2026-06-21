@@ -166,6 +166,10 @@ export const adminApi = {
     request<{ requirements: Array<{ resource_type: string; units: number }> }>(`/api/admin/service-requirements?serviceId=${encodeURIComponent(serviceId)}`),
   saveServiceRequirements: (serviceId: string, requirements: Array<{ resource_type: string; units: number }>) =>
     request("/api/admin/service-requirements", { method: "PUT", body: JSON.stringify({ serviceId, requirements }) }),
+  serviceCenters: (serviceId: string) =>
+    request<{ centerIds: string[] }>(`/api/admin/service-centers?serviceId=${encodeURIComponent(serviceId)}`),
+  saveServiceCenters: (serviceId: string, centerIds: string[]) =>
+    request("/api/admin/service-centers", { method: "PUT", body: JSON.stringify({ serviceId, centerIds }) }),
 
   // Resources & groups
   resources: () => request<{ resources: AdminResource[] }>("/api/admin/resources"),

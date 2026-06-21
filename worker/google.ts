@@ -152,6 +152,17 @@ export async function createCalendarEvent(
   return body.id;
 }
 
+export async function deleteCalendar(env: Env, calendarId: string): Promise<void> {
+  const token = await accessToken(env);
+  if (!token) return;
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}`,
+    { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (response.ok || response.status === 404 || response.status === 410) return;
+  console.error("[google] deleteCalendar failed", response.status, await response.text());
+}
+
 export async function deleteCalendarEvent(
   env: Env,
   calendarId: string,

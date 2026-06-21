@@ -6,6 +6,8 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Gauge,
   Languages,
@@ -17,7 +19,7 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import { addDays, format } from "date-fns";
+import { addDays, addMonths, eachDayOfInterval, endOfMonth, format, isBefore, isSameDay, isSameMonth, startOfMonth, startOfWeek, endOfWeek, startOfDay } from "date-fns";
 import clsx from "clsx";
 import { copy, getLanguage } from "./i18n";
 import { createBooking, getAvailability, getCenters, getForm, getPublicConfig, getServices } from "./api";
@@ -110,6 +112,101 @@ function Progress({ stage, language }: { stage: Stage; language: Language }) {
   );
 }
 
+function MiniCalendar({ selected, onChange, language }: { selected: string; onChange: (date: string) => void; language: Language }) {
+  const today = startOfDay(new Date());
+  const maxDate = addMonths(today, 12);
+  const [viewMonth, setViewMonth] = useState(() => startOfMonth(new Date(selected + "T12:00:00")));
+
+  const days = eachDayOfInterval({
+    start: startOfWeek(startOfMonth(viewMonth), { weekStartsOn: 0 }),
+    end: endOfWeek(endOfMonth(viewMonth), { weekStartsOn: 0 })
+  });
+
+  const weekdays = language === "fr"
+    ? ["Di", "Lu", "Ma", "Me", "Je", "Ve", "Sa"]
+    : ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+
+  const monthLabel = viewMonth.toLocaleDateString(language === "fr" ? "fr-CA" : "en-CA", { month: "long", year: "numeric" });
+
+  const canGoPrev = isSameMonth(viewMonth, today) ? false : isBefore(today, viewMonth);
+  const canGoNext = isBefore(viewMonth, startOfMonth(maxDate));
+
+  return (
+    <div className="select-none">
+      <div className="mb-3 flex items-center justify-between">
+        <button
+          className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-ink disabled:opacity-30"
+          onClick={() => setViewMonth((m) => addMonths(m, -1))}
+          disabled={!canGoPrev}
+        >
+          <ChevronLeft size={18} />
+        </button>
+        <p className="text-sm font-extrabold capitalize text-ink">{monthLabel}</p>
+        <button
+          className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-ink disabled:opacity-30"
+          onClick={() => setViewMonth((m) => addMonths(m, 1))}
+          disabled={!canGoNext}
+        >
+          <ChevronRight size={18} />
+        </button>
+      </div>
+      <div className="grid grid-cols-7 mb-1">
+        {weekdays.map((d) => (
+          <div key={d} className="py-1 text-center text-[10px] font-bold uppercase tracking-wider text-slate-400">{d}</div>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-y-0.5">
+        {days.map((day) => {
+          const dateStr = format(day, "yyyy-MM-dd");
+          const isSelected = isSameDay(day, new Date(selected + "T12:00:00"));
+          const isPast = isBefore(day, today) || isSameDay(day, today);
+          const isOtherMonth = !isSameMonth(day, viewMonth);
+          const isFuture = !isPast && !isBefore(maxDate, day);
+          return (
+            <button
+              key={dateStr}
+              disabled={isPast || isOtherMonth || !isFuture}
+              onClick={() => onChange(dateStr)}
+              className={clsx(
+                "mx-auto flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold transition",
+                isSelected && "bg-ink text-white shadow",
+                !isSelected && isFuture && !isOtherMonth && "hover:bg-brand-50 hover:text-brand-700 text-slate-700",
+                (isPast || isOtherMonth) && "text-slate-300 cursor-default",
+              )}
+            >
+              {format(day, "d")}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DescriptionMarkdown({ text }: { text: string }) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const hasBullets = lines.some((l) => /^[-*•]\s/.test(l.trim()));
+  if (hasBullets) {
+    const items = lines.filter((l) => /^[-*•]\s/.test(l.trim())).map((l) => l.replace(/^[-*•]\s+/, ""));
+    const pre = lines.filter((l) => !/^[-*•]\s/.test(l.trim()) && l.trim()).slice(0, lines.findIndex((l) => /^[-*•]\s/.test(l.trim())));
+    return (
+      <div className="mt-0.5 text-xs leading-5 text-slate-500">
+        {pre.map((p, i) => <p key={i}>{p}</p>)}
+        <ul className="mt-1 space-y-0.5 list-none">
+          {items.map((item, i) => (
+            <li key={i} className="flex items-start gap-1.5">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-brand-400" />
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  return <p className="mt-0.5 text-xs leading-5 text-slate-500">{text}</p>;
+}
+
 function ServiceSummary({
   center,
   service,
@@ -143,16 +240,14 @@ function ServiceSummary({
             </div>
           </div>
         )}
-        {service && (
+        {service && service.showDuration !== false && (
           <div className="flex gap-3">
             <Clock3 className="mt-0.5 text-brand-600" size={18} />
-            <div>
-              <p className="text-sm font-bold text-ink">
-                {service.durationMinutes} min · {service.priceDisplay || "Price on request"}
-              </p>
-              <p className="mt-0.5 text-xs leading-5 text-slate-500">{localize(service.description, language)}</p>
-            </div>
+            <p className="text-sm font-bold text-ink">{service.durationMinutes} min</p>
           </div>
+        )}
+        {service && localize(service.description, language) && (
+          <DescriptionMarkdown text={localize(service.description, language)} />
         )}
         {slot && (
           <div className="flex gap-3 rounded-xl bg-brand-50 p-3">
@@ -399,7 +494,6 @@ export default function PublicBooking() {
     }
   };
 
-  const dateOptions = Array.from({ length: 7 }, (_, index) => format(addDays(new Date(), index + 1), "yyyy-MM-dd"));
 
   if (stage === "confirmed" && confirmation) {
     return (
@@ -588,28 +682,8 @@ export default function PublicBooking() {
                     <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{t.chooseTime}</h1>
                   </div>
                 </div>
-                <div className="-mx-4 mt-6 overflow-x-auto px-4 pb-2">
-                  <div className="flex min-w-max gap-2">
-                    {dateOptions.map((item) => {
-                      const parsed = new Date(`${item}T12:00:00`);
-                      return (
-                        <button
-                          className={clsx(
-                            "w-[76px] rounded-xl border px-3 py-3 text-center transition",
-                            date === item
-                              ? "border-ink bg-ink text-white shadow-lg"
-                              : "border-slate-200 bg-white text-slate-600 hover:border-brand-300"
-                          )}
-                          onClick={() => setDate(item)}
-                          key={item}
-                        >
-                          <span className="block text-[10px] font-bold uppercase tracking-wider opacity-70">{format(parsed, "EEE")}</span>
-                          <span className="mt-1 block text-lg font-extrabold">{format(parsed, "d")}</span>
-                          <span className="block text-[10px] font-semibold opacity-70">{format(parsed, "MMM")}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                <div className="card mt-6 p-4">
+                  <MiniCalendar selected={date} onChange={setDate} language={language} />
                 </div>
                 <div className="card mt-5 p-5 sm:p-6">
                   <div className="flex items-center justify-between">

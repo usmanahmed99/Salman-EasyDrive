@@ -39,11 +39,13 @@ export const demoServices: Service[] = [
     durationMinutes: 120,
     bufferBeforeMinutes: 15,
     bufferAfterMinutes: 15,
+    slotIntervalMinutes: 30,
     priceDisplay: "$120",
     enabled: true,
     formId: "form_road_test",
     cutoffHours: 4,
-    cancellationCutoffHours: 24
+    cancellationCutoffHours: 24,
+    showDuration: true
   },
   {
     id: "svc_rental",
@@ -56,11 +58,13 @@ export const demoServices: Service[] = [
     durationMinutes: 90,
     bufferBeforeMinutes: 15,
     bufferAfterMinutes: 15,
+    slotIntervalMinutes: 30,
     priceDisplay: "$80",
     enabled: true,
     formId: "form_rental",
     cutoffHours: 2,
-    cancellationCutoffHours: 24
+    cancellationCutoffHours: 24,
+    showDuration: true
   },
   {
     id: "svc_lesson",
@@ -73,11 +77,13 @@ export const demoServices: Service[] = [
     durationMinutes: 60,
     bufferBeforeMinutes: 10,
     bufferAfterMinutes: 10,
+    slotIntervalMinutes: 30,
     priceDisplay: "$55",
     enabled: true,
     formId: "form_lesson",
     cutoffHours: 2,
-    cancellationCutoffHours: 12
+    cancellationCutoffHours: 12,
+    showDuration: true
   },
   {
     id: "svc_mock",
@@ -90,10 +96,12 @@ export const demoServices: Service[] = [
     durationMinutes: 60,
     bufferBeforeMinutes: 10,
     bufferAfterMinutes: 10,
+    slotIntervalMinutes: 30,
     priceDisplay: "$60",
     enabled: true,
     formId: "form_lesson",
-    cutoffHours: 2
+    cutoffHours: 2,
+    showDuration: true
   },
   {
     id: "svc_parking",
@@ -106,10 +114,12 @@ export const demoServices: Service[] = [
     durationMinutes: 60,
     bufferBeforeMinutes: 10,
     bufferAfterMinutes: 10,
+    slotIntervalMinutes: 30,
     priceDisplay: "$55",
     enabled: true,
     formId: "form_lesson",
-    cutoffHours: 2
+    cutoffHours: 2,
+    showDuration: true
   },
   {
     id: "svc_highway",
@@ -122,10 +132,12 @@ export const demoServices: Service[] = [
     durationMinutes: 60,
     bufferBeforeMinutes: 10,
     bufferAfterMinutes: 10,
+    slotIntervalMinutes: 30,
     priceDisplay: "$60",
     enabled: true,
     formId: "form_lesson",
-    cutoffHours: 2
+    cutoffHours: 2,
+    showDuration: true
   }
 ];
 

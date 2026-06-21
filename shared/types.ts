@@ -22,12 +22,14 @@ export interface Service {
   durationMinutes: number;
   bufferBeforeMinutes: number;
   bufferAfterMinutes: number;
+  slotIntervalMinutes: number;
   priceDisplay?: string;
   enabled: boolean;
   requestOnly?: boolean;
   formId?: string;
   cutoffHours: number;
   cancellationCutoffHours?: number;
+  showDuration: boolean;
 }
 
 export type FormFieldType =

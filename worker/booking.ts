@@ -341,12 +341,14 @@ export function serviceResponse(service: {
   duration_minutes: number;
   buffer_before_minutes: number;
   buffer_after_minutes: number;
+  slot_interval_minutes: number;
   price_display: string | null;
   enabled: number;
   request_only: number;
   form_id: string;
   cutoff_hours: number;
   cancellation_cutoff_hours: number | null;
+  show_duration: number;
 }) {
   return {
     id: service.id,
@@ -356,11 +358,13 @@ export function serviceResponse(service: {
     durationMinutes: service.duration_minutes,
     bufferBeforeMinutes: service.buffer_before_minutes,
     bufferAfterMinutes: service.buffer_after_minutes,
+    slotIntervalMinutes: service.slot_interval_minutes ?? 30,
     priceDisplay: service.price_display || undefined,
     enabled: Boolean(service.enabled),
     requestOnly: Boolean(service.request_only),
     formId: service.form_id,
     cutoffHours: service.cutoff_hours,
-    cancellationCutoffHours: service.cancellation_cutoff_hours || undefined
+    cancellationCutoffHours: service.cancellation_cutoff_hours || undefined,
+    showDuration: service.show_duration !== 0
   };
 }

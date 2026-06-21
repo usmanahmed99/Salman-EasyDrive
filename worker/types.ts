@@ -48,4 +48,5 @@ export interface DbService {
   cancellation_cutoff_hours: number | null;
   form_id: string;
   base_concurrency: number;
+  show_duration: number;
 }

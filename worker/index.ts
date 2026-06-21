@@ -3,7 +3,7 @@ import type { BookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmBooking, serviceResponse, syncBookingCalendar, type ConfirmBookingPayload } from "./booking";
-import { createCalendar, listCalendars, shareCalendar } from "./google";
+import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
 import type { DbCenter, DbService, Env } from "./types";
 import {
   assertTrustedOrigin,
@@ -105,6 +105,22 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
           "INSERT INTO calendar_mappings(id,center_id,mapping_type,mapping_id,calendar_id,event_role) VALUES(?,?,?,?,?,?)"
         ).bind(mappingId, nextId, "center", nextId, calId, "canonical").run();
       }
+      // Auto-create "Cars" and "Instructors" resource groups for this center.
+      const carGroupId = uuid();
+      await env.DB.prepare(
+        "INSERT INTO resource_groups(id, center_id, name, type, mode, capacity, enabled) VALUES(?, ?, ?, 'cars', 'pooled', 3, 1)"
+      ).bind(carGroupId, nextId, `${payload.name} Cars`).run();
+      const instructorGroupId = uuid();
+      await env.DB.prepare(
+        "INSERT INTO resource_groups(id, center_id, name, type, mode, capacity, enabled) VALUES(?, ?, ?, 'instructors', 'named', 0, 1)"
+      ).bind(instructorGroupId, nextId, `${payload.name} Instructors`).run();
+      // Link all existing enabled services to this new center.
+      const allServices = await env.DB.prepare("SELECT id FROM services WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+      for (const svc of allServices.results) {
+        await env.DB.prepare(
+          "INSERT OR IGNORE INTO service_centers(service_id, center_id, enabled) VALUES(?,?,1)"
+        ).bind(svc.id, nextId).run();
+      }
       return json({ id: nextId, calendarId: calId ?? undefined, ...payload }, 201);
     }
     if (method === "PATCH" && id) {
@@ -122,6 +138,15 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       if (future?.count) throw new HttpError(409, "This center has future bookings and cannot be deleted.", "future_bookings_exist");
       await env.DB.prepare("UPDATE centers SET deleted_at = CURRENT_TIMESTAMP, enabled = 0 WHERE id = ?").bind(id).run();
       await audit(env, user.id, "delete", "center", id, {}, request);
+      // Best-effort: delete the associated Google Calendar.
+      const centerMapping = await env.DB.prepare(
+        "SELECT calendar_id FROM calendar_mappings WHERE center_id=? AND mapping_type='center' AND enabled=1 LIMIT 1"
+      ).bind(id).first<{ calendar_id: string }>();
+      if (centerMapping?.calendar_id) {
+        deleteCalendar(env, centerMapping.calendar_id).catch((err: unknown) =>
+          console.error("[auto-calendar] center calendar deletion failed", err)
+        );
+      }
       return new Response(null, { status: 204 });
     }
   }
@@ -142,11 +167,13 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       duration: Number(body.durationMinutes || 60),
       bufferBefore: Number(body.bufferBeforeMinutes || 0),
       bufferAfter: Number(body.bufferAfterMinutes || 0),
+      slotInterval: Number(body.slotIntervalMinutes || 30),
       price: body.priceDisplay ? String(body.priceDisplay) : null,
       formId: String(body.formId || "form_lesson"),
       cutoff: Number(body.cutoffHours || 0),
       concurrency: Number(body.baseConcurrency || 1),
-      enabled: body.enabled === false ? 0 : 1
+      enabled: body.enabled === false ? 0 : 1,
+      showDuration: body.showDuration === false ? 0 : 1
     };
     if (!values.slug || !values.nameEn) throw new HttpError(400, "Service name and slug are required.");
     if (method === "POST") {
@@ -154,18 +181,20 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare(`
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
-          buffer_before_minutes, buffer_after_minutes, price_display, form_id, cutoff_hours, base_concurrency, enabled
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.price, values.formId, values.cutoff, values.concurrency, values.enabled).run();
+          buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display,
+          form_id, cutoff_hours, base_concurrency, enabled, show_duration
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration).run();
       await audit(env, user.id, "create", "service", nextId, body, request);
       return json({ id: nextId }, 201);
     }
     if (method === "PATCH" && id) {
       await env.DB.prepare(`
         UPDATE services SET slug=?, name_en=?, name_fr=?, description_en=?, description_fr=?,
-        duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, price_display=?,
-        form_id=?, cutoff_hours=?, base_concurrency=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, id).run();
+        duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
+        price_display=?, form_id=?, cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
+        updated_at=CURRENT_TIMESTAMP WHERE id=?
+      `).bind(values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }
@@ -188,8 +217,14 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         WHERE bra.resource_id=? AND b.start_at>CURRENT_TIMESTAMP AND b.status IN ('confirmed','calendar_sync_failed')
       `).bind(id).first<{ count: number }>();
       if (future?.count) throw new HttpError(409, "This resource has future bookings and cannot be deleted.", "future_bookings_exist");
+      const resourceRow = await env.DB.prepare("SELECT calendar_id FROM resources WHERE id=?").bind(id).first<{ calendar_id: string | null }>();
       await env.DB.prepare("UPDATE resources SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
       await audit(env, user.id, "delete", "resource", id, {}, request);
+      if (resourceRow?.calendar_id) {
+        deleteCalendar(env, resourceRow.calendar_id).catch((err: unknown) =>
+          console.error("[auto-calendar] resource calendar deletion failed", err)
+        );
+      }
       return new Response(null, { status: 204 });
     }
     const payload = resourceMutationSchema.parse(await readJson(request));
@@ -317,12 +352,21 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/public/services" && method === "GET") {
     const centerSlug = url.searchParams.get("centerSlug");
     if (!centerSlug) throw new HttpError(400, "centerSlug is required.");
+    // A service with no service_centers rows is treated as available at all centers.
     const results = await env.DB.prepare(`
       SELECT services.* FROM services
-      JOIN service_centers ON service_centers.service_id=services.id
-      JOIN centers ON centers.id=service_centers.center_id
-      WHERE centers.slug=? AND centers.enabled=1 AND service_centers.enabled=1
-      AND services.enabled=1 AND services.deleted_at IS NULL ORDER BY services.name_en
+      JOIN centers ON centers.slug=? AND centers.enabled=1
+      WHERE services.enabled=1 AND services.deleted_at IS NULL
+        AND (
+          NOT EXISTS (SELECT 1 FROM service_centers WHERE service_centers.service_id=services.id)
+          OR EXISTS (
+            SELECT 1 FROM service_centers
+            WHERE service_centers.service_id=services.id
+              AND service_centers.center_id=centers.id
+              AND service_centers.enabled=1
+          )
+        )
+      ORDER BY services.name_en
     `).bind(centerSlug).all<DbService>();
     return json(results.results.map(serviceResponse));
   }
@@ -622,6 +666,40 @@ async function route(request: Request, env: Env): Promise<Response> {
         ).bind(uuid(), body.serviceId, req.resource_type, req.units).run();
       }
       return json({ requirements: valid });
+    }
+
+    if (path === "/api/admin/service-centers" && method === "GET") {
+      const serviceId = url.searchParams.get("serviceId");
+      if (!serviceId) throw new HttpError(400, "serviceId is required.");
+      const results = await env.DB.prepare(
+        "SELECT center_id, enabled FROM service_centers WHERE service_id=?"
+      ).bind(serviceId).all<{ center_id: string; enabled: number }>();
+      const enabled = results.results.filter((r) => r.enabled).map((r) => r.center_id);
+      // No rows = available everywhere; return all active center IDs so UI shows all checked.
+      if (results.results.length === 0) {
+        const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+        return json({ centerIds: allCenters.results.map((c) => c.id), allCenters: true });
+      }
+      return json({ centerIds: enabled });
+    }
+
+    if (path === "/api/admin/service-centers" && method === "PUT") {
+      const body = await readJson(request) as { serviceId: string; centerIds: string[] };
+      if (!body.serviceId) throw new HttpError(400, "serviceId is required.");
+      const ids: string[] = Array.isArray(body.centerIds) ? body.centerIds : [];
+      const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+      const allSelected = allCenters.results.every((c) => ids.includes(c.id));
+      // No rows = available at all centers. Delete all rows when all are checked.
+      await env.DB.prepare("DELETE FROM service_centers WHERE service_id=?").bind(body.serviceId).run();
+      if (!allSelected && ids.length > 0) {
+        for (const centerId of ids) {
+          await env.DB.prepare(
+            "INSERT OR IGNORE INTO service_centers(service_id, center_id, enabled) VALUES(?,?,1)"
+          ).bind(body.serviceId, centerId).run();
+        }
+      }
+      await audit(env, user.id, "update", "service_centers", body.serviceId, body, request);
+      return json({ serviceId: body.serviceId, centerIds: ids });
     }
 
     return adminCrud(request, env, path, user);
