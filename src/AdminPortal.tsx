@@ -850,13 +850,15 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
   const [editing, setEditing] = useState<Service | null | "new">(null);
   const [serviceCenterIds, setServiceCenterIds] = useState<Record<string, string[]>>({});
 
-  const loadCenterIds = async (serviceId: string) => {
-    if (serviceCenterIds[serviceId] !== undefined) return;
+  const loadCenterIds = async (serviceId: string): Promise<string[]> => {
+    if (serviceCenterIds[serviceId] !== undefined) return serviceCenterIds[serviceId];
     try {
       const result = await adminApi.serviceCenters(serviceId);
       setServiceCenterIds((prev) => ({ ...prev, [serviceId]: result.centerIds }));
+      return result.centerIds;
     } catch {
       setServiceCenterIds((prev) => ({ ...prev, [serviceId]: [] }));
+      return [];
     }
   };
 
@@ -904,7 +906,7 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
                 </div>
                 <div className="flex items-center gap-5 text-xs">
                   <div><p className="text-slate-400">Requires</p><p className="mt-1 font-bold capitalize text-ink">{requirementLabel(service.id)}</p></div>
-                  <button className="secondary-button min-h-10 px-4 py-2" onClick={() => { loadCenterIds(service.id); setEditing(service); }}>Edit</button>
+                  <button className="secondary-button min-h-10 px-4 py-2" onClick={async () => { await loadCenterIds(service.id); setEditing(service); }}>Edit</button>
                   <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(service)}><Trash2 size={15} /></button>
                 </div>
               </div>
