@@ -398,6 +398,7 @@ export default function PublicBooking() {
   const [slot, setSlot] = useState<Slot>();
   const [form, setForm] = useState<BookingForm>();
   const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [confirmEmail, setConfirmEmail] = useState("");
   const [loading, setLoading] = useState(true);
   const [slotLoading, setSlotLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -472,6 +473,18 @@ export default function PublicBooking() {
     if (missing) {
       setError(`${localize(missing.label, language)} — ${t.required}`);
       return;
+    }
+    const emailField = form.fields.find((f) => f.type === "email");
+    if (emailField) {
+      const emailVal = String(answers[emailField.key] || "");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
+        setError(t.emailInvalid);
+        return;
+      }
+      if (emailVal.toLowerCase() !== confirmEmail.toLowerCase().trim()) {
+        setError(t.emailMismatch);
+        return;
+      }
     }
     setSubmitting(true);
     setError("");
@@ -743,13 +756,27 @@ export default function PublicBooking() {
                 ) : (
                   <div className="card mt-7 space-y-5 p-5 sm:p-7">
                     {form.fields.map((field) => (
-                      <DynamicField
-                        field={field}
-                        language={language}
-                        value={answers[field.key]}
-                        onChange={(value) => setAnswers((current) => ({ ...current, [field.key]: value }))}
-                        key={field.id}
-                      />
+                      <div key={field.id}>
+                        <DynamicField
+                          field={field}
+                          language={language}
+                          value={answers[field.key]}
+                          onChange={(value) => setAnswers((current) => ({ ...current, [field.key]: value }))}
+                        />
+                        {field.type === "email" && (
+                          <label className="mt-5 block">
+                            <span className="label">{t.confirmEmail} <span className="text-brand-600">*</span></span>
+                            <input
+                              className="field"
+                              type="email"
+                              autoComplete="off"
+                              value={confirmEmail}
+                              onChange={(e) => setConfirmEmail(e.target.value)}
+                              onPaste={(e) => e.preventDefault()}
+                            />
+                          </label>
+                        )}
+                      </div>
                     ))}
                     <div className="flex items-center gap-2 border-t border-slate-100 pt-5 text-xs font-medium text-slate-500">
                       <LockKeyhole size={15} className="text-emerald-500" />

@@ -87,8 +87,8 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       const results = await env.DB.prepare("SELECT * FROM centers WHERE deleted_at IS NULL ORDER BY name").all();
       return json({ centers: results.results });
     }
-    const payload = centerMutationSchema.parse(await readJson(request));
     if (method === "POST") {
+      const payload = centerMutationSchema.parse(await readJson(request));
       const nextId = uuid();
       await env.DB.prepare(`
         INSERT INTO centers(id, name, slug, address, timezone, enabled) VALUES (?, ?, ?, ?, ?, ?)
@@ -124,6 +124,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       return json({ id: nextId, calendarId: calId ?? undefined, ...payload }, 201);
     }
     if (method === "PATCH" && id) {
+      const payload = centerMutationSchema.parse(await readJson(request));
       await env.DB.prepare(`
         UPDATE centers SET name = ?, slug = ?, address = ?, timezone = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).bind(payload.name, payload.slug, payload.address || null, payload.timezone, Number(payload.enabled), id).run();

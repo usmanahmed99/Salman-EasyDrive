@@ -165,6 +165,27 @@ function ScreenSkeleton() {
   );
 }
 
+function useConfirm() {
+  const [state, setState] = useState<{ message: string; resolve: (v: boolean) => void } | null>(null);
+  const confirm = (message: string): Promise<boolean> =>
+    new Promise((resolve) => setState({ message, resolve }));
+  const dialog = state ? (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/50 p-6 backdrop-blur-sm">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+        <div className="flex items-start gap-3">
+          <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-600"><AlertTriangle size={20} /></div>
+          <p className="mt-1.5 text-sm font-medium text-slate-700">{state.message}</p>
+        </div>
+        <div className="mt-6 flex justify-end gap-3">
+          <button className="secondary-button px-4 py-2 text-sm" onClick={() => { state.resolve(false); setState(null); }}>Cancel</button>
+          <button className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700" onClick={() => { state.resolve(true); setState(null); }}>Confirm</button>
+        </div>
+      </div>
+    </div>
+  ) : null;
+  return { confirm, dialog };
+}
+
 function useToast() {
   const [toast, setToast] = useState<{ kind: "error" | "success"; message: string } | null>(null);
   const show = useCallback((kind: "error" | "success", message: string) => {
@@ -630,9 +651,10 @@ function CenterModal({ center, onClose, onSaved }: { center: Center | null; onCl
 function CentersScreen({ centers, bookings, groups, resources, reload, toast }: { centers: Center[]; bookings: AdminBooking[]; groups: ResourceGroup[]; resources: AdminResource[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
   const [editing, setEditing] = useState<Center | null | "new">(null);
   const today = new Date().toISOString().slice(0, 10);
+  const { confirm, dialog } = useConfirm();
 
   const remove = async (center: Center) => {
-    if (!confirm(`Delete ${center.name}? This cannot be undone.`)) return;
+    if (!await confirm(`Delete ${center.name}? This cannot be undone.`)) return;
     try {
       await adminApi.deleteCenter(center.id);
       toast.show("success", `${center.name} deleted.`);
@@ -675,6 +697,7 @@ function CentersScreen({ centers, bookings, groups, resources, reload, toast }: 
         </button>
       </div>
       {editing && <CenterModal center={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Center saved."); reload(); }} />}
+      {dialog}
     </>
   );
 }
@@ -849,6 +872,7 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
 }) {
   const [editing, setEditing] = useState<Service | null | "new">(null);
   const [serviceCenterIds, setServiceCenterIds] = useState<Record<string, string[]>>({});
+  const { confirm, dialog } = useConfirm();
 
   const loadCenterIds = async (serviceId: string): Promise<string[]> => {
     if (serviceCenterIds[serviceId] !== undefined) return serviceCenterIds[serviceId];
@@ -863,7 +887,7 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
   };
 
   const remove = async (service: Service) => {
-    if (!confirm(`Disable ${service.name.en}?`)) return;
+    if (!await confirm(`Disable ${service.name.en}?`)) return;
     try {
       await adminApi.deleteService(service.id);
       toast.show("success", "Service disabled.");
@@ -928,6 +952,7 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
           />
         );
       })()}
+      {dialog}
     </>
   );
 }
@@ -1032,6 +1057,7 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
 function ResourcesScreen({ resources, groups, centers, reload, toast }: { resources: AdminResource[]; groups: ResourceGroup[]; centers: Center[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
   const [editing, setEditing] = useState<AdminResource | null | "new">(null);
   const [savingGroup, setSavingGroup] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
   const instructors = resources.filter((resource) => resource.type === "instructor");
   const carGroups = groups.filter((group) => group.type === "cars");
   // Group instructors by center using their group's center_id.
@@ -1058,7 +1084,7 @@ function ResourcesScreen({ resources, groups, centers, reload, toast }: { resour
   };
 
   const remove = async (resource: AdminResource) => {
-    if (!confirm(`Remove ${resource.name}?`)) return;
+    if (!await confirm(`Remove ${resource.name}?`)) return;
     try {
       await adminApi.deleteResource(resource.id);
       toast.show("success", "Instructor removed.");
@@ -1148,6 +1174,7 @@ function ResourcesScreen({ resources, groups, centers, reload, toast }: { resour
         </div>
       </section>
       {editing && <InstructorModal resource={editing === "new" ? null : editing} groups={groups} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Instructor saved."); reload(); }} />}
+      {dialog}
     </div>
   );
 }
@@ -1898,6 +1925,7 @@ export default function AdminPortal() {
   const [connections, setConnections] = useState<Array<Record<string, string>>>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const toast = useToast();
+  const { confirm: confirmDialog, dialog: confirmDialogEl } = useConfirm();
   const loadedRequirements = useRef(false);
 
   const mapBookings = (rows: Array<Record<string, string>>): AdminBooking[] => rows.map((booking) => ({
@@ -1979,7 +2007,7 @@ export default function AdminPortal() {
   }, [toast]);
 
   const onCancel = useCallback(async (id: string) => {
-    if (!confirm("Cancel this booking?")) return;
+    if (!await confirmDialog("Cancel this booking?")) return;
     try {
       await adminApi.cancelBooking(id);
       toast.show("success", "Booking cancelled.");
@@ -2086,6 +2114,7 @@ export default function AdminPortal() {
         </header>
         <main className="p-4 sm:p-6">{content()}</main>
       </div>
+      {confirmDialogEl}
     </div>
   );
 }
