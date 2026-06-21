@@ -2152,7 +2152,7 @@ export default function AdminPortal() {
     calendarLastError: booking.calendar_last_error || undefined
   } as AdminBooking));
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (opts?: { requirements?: boolean }) => {
     setDataLoading(true);
     const [b, o, c, s, r, g, f, m, conn] = await Promise.allSettled([
       adminApi.bookings(), adminApi.overrides(), adminApi.centers(), adminApi.services(),
@@ -2169,8 +2169,10 @@ export default function AdminPortal() {
     if (conn.status === "fulfilled") setConnections(conn.value.connections);
     setDataLoading(false);
 
-    // Load requirements per service once for the Services screen.
-    if (s.status === "fulfilled" && !loadedRequirements.current) {
+    // Load requirements per service for the Services screen. Loaded lazily on the
+    // first pass, then re-fetched on demand (opts.requirements) so editing a
+    // service's resource requirements updates its "Requires" line without a refresh.
+    if (s.status === "fulfilled" && (!loadedRequirements.current || opts?.requirements)) {
       loadedRequirements.current = true;
       const entries = await Promise.allSettled(s.value.services.map(async (service) => [service.id, (await adminApi.serviceRequirements(service.id)).requirements] as const));
       const next: Record<string, Array<{ resource_type: string; units: number }>> = {};
@@ -2270,7 +2272,7 @@ export default function AdminPortal() {
     if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} openSection={openSection} />;
     if (section === "bookings") return <BookingsScreen bookings={bookings} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} />;
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
-    if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={loadAll} toast={toast} />;
+    if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
     if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} centers={centers} reload={loadAll} toast={toast} />;
     if (section === "availability") return <AvailabilityScreen centers={centers} services={services} groups={groups} toast={toast} />;
     if (section === "forms") return <FormBuilderScreen forms={forms} reload={loadAll} toast={toast} />;
