@@ -12,3 +12,7 @@ test-results
 .playwright-mcp
 .screenshots/
 *.png
+
+# Local embed/iframe test scaffolding (not part of the app or build)
+iframe-test.html
+serve-embed-test.mjs
