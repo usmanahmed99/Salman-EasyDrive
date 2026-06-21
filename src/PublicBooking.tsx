@@ -19,7 +19,7 @@ import {
   Sparkles,
   Star,
 } from "lucide-react";
-import { addDays, addMonths, eachDayOfInterval, endOfMonth, format, isBefore, isSameDay, isSameMonth, startOfMonth, startOfWeek, endOfWeek, startOfDay } from "date-fns";
+import { addMonths, eachDayOfInterval, endOfMonth, format, isBefore, isSameDay, isSameMonth, startOfMonth, startOfWeek, endOfWeek, startOfDay } from "date-fns";
 import clsx from "clsx";
 import { copy, getLanguage } from "./i18n";
 import { createBooking, getAvailability, getCenters, getForm, getPublicConfig, getServices } from "./api";
@@ -159,7 +159,8 @@ function MiniCalendar({ selected, onChange, language }: { selected: string; onCh
         {days.map((day) => {
           const dateStr = format(day, "yyyy-MM-dd");
           const isSelected = isSameDay(day, new Date(selected + "T12:00:00"));
-          const isPast = isBefore(day, today) || isSameDay(day, today);
+          const isToday = isSameDay(day, today);
+          const isPast = isBefore(day, today) && !isToday;
           const isOtherMonth = !isSameMonth(day, viewMonth);
           const isFuture = !isPast && !isBefore(maxDate, day);
           return (
@@ -170,6 +171,7 @@ function MiniCalendar({ selected, onChange, language }: { selected: string; onCh
               className={clsx(
                 "mx-auto flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold transition",
                 isSelected && "bg-ink text-white shadow",
+                !isSelected && isToday && isFuture && "ring-1 ring-brand-300",
                 !isSelected && isFuture && !isOtherMonth && "hover:bg-brand-50 hover:text-brand-700 text-slate-700",
                 (isPast || isOtherMonth) && "text-slate-300 cursor-default",
               )}
@@ -394,7 +396,7 @@ export default function PublicBooking() {
   const [center, setCenter] = useState<Center>();
   const [service, setService] = useState<Service>();
   const [stage, setStage] = useState<Stage>("center");
-  const [date, setDate] = useState(format(addDays(new Date(), 1), "yyyy-MM-dd"));
+  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slot, setSlot] = useState<Slot>();
   const [form, setForm] = useState<BookingForm>();
