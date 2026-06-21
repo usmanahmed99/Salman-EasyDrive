@@ -650,40 +650,31 @@ function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooki
   return (
     <div className="card overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-slate-100 p-5">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="relative min-w-[240px] flex-1">
-            <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input className="field py-2.5 pl-10 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <div className="relative w-full max-w-md">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select className="field h-10 w-auto min-w-[140px] py-0 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <option value="all">All statuses</option>
+            {statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+          </select>
+          <select className="field h-10 w-auto min-w-[140px] py-0 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
+            <option value="all">All centers</option>
+            {centers.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <input type="date" className="field h-10 w-[150px] py-0 text-sm" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <span>–</span>
+            <input type="date" className="field h-10 w-[150px] py-0 text-sm" aria-label="To date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Status</span>
-            <select className="field w-40 py-2.5 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="all">All statuses</option>
-              {statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Center</span>
-            <select className="field w-40 py-2.5 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
-              <option value="all">All centers</option>
-              {centers.map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">From</span>
-            <input type="date" className="field w-40 py-2.5 text-sm" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">To</span>
-            <input type="date" className="field w-40 py-2.5 text-sm" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-          </label>
           {hasFilters && (
-            <button className="flex h-[42px] items-center gap-1 px-2 text-xs font-semibold text-slate-500 hover:text-slate-800" onClick={clearFilters}>
+            <button className="flex h-10 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800" onClick={clearFilters}>
               <X size={14} /> Clear
             </button>
           )}
+          <span className="ml-auto text-xs text-slate-500">{filtered.length} of {bookings.length}</span>
         </div>
-        <p className="text-xs text-slate-500">{filtered.length} of {bookings.length} bookings</p>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[960px] text-left">
