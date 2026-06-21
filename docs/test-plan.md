@@ -258,7 +258,7 @@ Set these up by creating bookings via the public flow (or the admin), then re-ch
 | SEC-03 | Confirm public `manage` tokens are hashed (`public_token_hash`), never stored raw | DB holds only hashes | P0 |
 | SEC-04 | Confirm Google refresh token stored encrypted (`encrypted_refresh_token`) | Not plaintext | P0 |
 | SEC-05 | Hammer `/api/public/availability` > 120 req / 5 min from one IP | 429 `rate_limited` | P1 |
-| SEC-06 | Hammer `/api/public/bookings` > 12 req / 10 min | 429 `rate_limited` | P1 |
+| SEC-06 | Hammer `/api/public/bookings` > 20 req / 5 min | 429 `rate_limited` with a message to try again in 5 minutes | P1 |
 | SEC-07 | Inspect any Calendar event title/desc | No phone numbers or full contact info | P0 |
 | SEC-08 | (If enabled) submit booking without Turnstile token | `turnstile_required`; valid token passes | P2 |
 

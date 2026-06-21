@@ -590,6 +590,37 @@ function bookingDate(booking: AdminBooking) {
   return montrealDate(booking.start_at);
 }
 
+/**
+ * Convert a wall-clock "YYYY-MM-DDTHH:mm" (as typed in a datetime-local input,
+ * interpreted in the given IANA timezone) to an ISO-8601 string with the correct
+ * UTC offset. Mirrors the worker's localDateTimeToIso so admin-entered times land
+ * at the intended local hour regardless of the browser's own timezone.
+ */
+function localInputToIso(value: string, timeZone: string) {
+  const [date, time] = value.split("T");
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const assumedUtc = Date.UTC(year, month - 1, day, hour, minute);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(assumedUtc));
+  const v = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  const represented = Date.UTC(Number(v.year), Number(v.month) - 1, Number(v.day), Number(v.hour), Number(v.minute));
+  return new Date(assumedUtc - (represented - assumedUtc)).toISOString();
+}
+
+/** ISO timestamp → "YYYY-MM-DDTHH:mm" wall-clock in the given timezone, for datetime-local inputs. */
+function isoToLocalInput(iso: string, timeZone: string) {
+  if (!iso) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(iso));
+  const v = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return `${v.year}-${v.month}-${v.day}T${v.hour}:${v.minute}`;
+}
+
 /** Calendar date (YYYY-MM-DD) of an ISO timestamp in the America/Montreal timezone. */
 function montrealDate(iso: string) {
   if (!iso) return "";
@@ -620,7 +651,119 @@ function formatDayLabel(day: string) {
 /* Bookings                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { bookings: AdminBooking[]; onResync: (id: string) => Promise<void>; onCancel: (id: string) => Promise<void>; onReconcile: () => Promise<void> }) {
+function NewBookingModal({ centers, services, onClose, onBooked }: {
+  centers: Center[];
+  services: Service[];
+  onClose: () => void;
+  onBooked: () => void;
+}) {
+  const enabledServices = useMemo(() => services.filter((s) => s.enabled), [services]);
+  const [centerSlug, setCenterSlug] = useState(centers[0]?.slug || "");
+  const [serviceSlug, setServiceSlug] = useState(enabledServices[0]?.slug || "");
+  const [when, setWhen] = useState("");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const timezone = centers.find((c) => c.slug === centerSlug)?.timezone || "America/Montreal";
+
+  const save = async () => {
+    setError("");
+    if (!centerSlug || !serviceSlug || !when || name.trim().length < 1) {
+      setError("Center, service, date/time and student name are required.");
+      return;
+    }
+    setSaving(true);
+    try {
+      await adminApi.createAdminBooking({
+        centerSlug, serviceSlug, start: localInputToIso(when, timezone),
+        studentName: name.trim(), studentEmail: email.trim() || undefined, studentPhone: phone.trim() || undefined
+      });
+      onBooked();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title="New booking"
+      onClose={onClose}
+      footer={<>
+        <button className="secondary-button" onClick={onClose}>Cancel</button>
+        <button className="primary-button" disabled={saving} onClick={save}>{saving && <LoaderCircle className="animate-spin" size={16} />} Create booking</button>
+      </>}
+    >
+      {error && <Banner kind="error" message={error} onClose={() => setError("")} />}
+      <p className="mb-4 text-xs text-slate-500">Admin bookings ignore lead-time cutoffs and opening hours, but still won't double-book an instructor or car that's already taken.</p>
+      <div className="grid gap-5 sm:grid-cols-2">
+        <Field label="Center">
+          <select className="field" value={centerSlug} onChange={(e) => setCenterSlug(e.target.value)}>
+            {centers.map((c) => <option key={c.id} value={c.slug}>{c.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Service">
+          <select className="field" value={serviceSlug} onChange={(e) => setServiceSlug(e.target.value)}>
+            {enabledServices.map((s) => <option key={s.id} value={s.slug}>{s.name.en}</option>)}
+          </select>
+        </Field>
+        <Field label="Date & time (center local time)"><input className="field" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></Field>
+        <Field label="Student name"><input className="field" value={name} onChange={(e) => setName(e.target.value)} placeholder="Full name" /></Field>
+        <Field label="Email (optional)"><input className="field" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="student@example.com" /></Field>
+        <Field label="Phone (optional)"><input className="field" type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(514) 555-0123" /></Field>
+      </div>
+    </Modal>
+  );
+}
+
+function RescheduleModal({ booking, centers, onClose, onRescheduled }: {
+  booking: AdminBooking;
+  centers: Center[];
+  onClose: () => void;
+  onRescheduled: () => void;
+}) {
+  // The booking row doesn't carry its center timezone; match by display name, default to Montreal.
+  const timezone = centers.find((c) => c.name === booking.center)?.timezone || "America/Montreal";
+  const [when, setWhen] = useState(() => isoToLocalInput(booking.start_at, timezone));
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setError("");
+    if (!when) { setError("Please choose a new date and time."); return; }
+    setSaving(true);
+    try {
+      await adminApi.rescheduleBooking(booking.id, localInputToIso(when, timezone));
+      onRescheduled();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={`Reschedule ${booking.reference}`}
+      onClose={onClose}
+      footer={<>
+        <button className="secondary-button" onClick={onClose}>Cancel</button>
+        <button className="primary-button" disabled={saving} onClick={save}>{saving && <LoaderCircle className="animate-spin" size={16} />} Reschedule</button>
+      </>}
+    >
+      {error && <Banner kind="error" message={error} onClose={() => setError("")} />}
+      <p className="mb-4 text-sm text-slate-600"><span className="font-semibold text-ink">{booking.student}</span> · {booking.service} · {booking.center}</p>
+      <p className="mb-4 text-xs text-slate-500">Cutoffs and opening hours are overridden; the move is blocked only if the required instructor or car is already booked at the new time. The student's calendar invite is updated.</p>
+      <Field label="New date & time (center local time)"><input className="field" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} /></Field>
+    </Modal>
+  );
+}
+
+function BookingsScreen({ bookings, centers, services, onResync, onCancel, onReconcile, reload }: { bookings: AdminBooking[]; centers: Center[]; services: Service[]; onResync: (id: string) => Promise<void>; onCancel: (id: string) => Promise<void>; onReconcile: () => Promise<void>; reload: () => Promise<void> }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [centerFilter, setCenterFilter] = useState("all");
@@ -628,13 +771,15 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [reconciling, setReconciling] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [rescheduling, setRescheduling] = useState<AdminBooking | null>(null);
 
   const reconcile = async () => {
     setReconciling(true);
     try { await onReconcile(); } finally { setReconciling(false); }
   };
 
-  const centers = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
+  const centerNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
   const statuses = useMemo(() => Array.from(new Set(bookings.map((b) => b.status))).sort(), [bookings]);
 
   const filtered = useMemo(() => bookings.filter((booking) => {
@@ -655,6 +800,7 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
   };
 
   return (
+    <>
     <div className="card overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-slate-100 p-5">
         <div className="flex items-center gap-3">
@@ -662,9 +808,14 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <button className="secondary-button ml-auto min-h-10 shrink-0 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
-            {reconciling ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Reconcile calendar
-          </button>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <button className="secondary-button min-h-10 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
+              {reconciling ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Reconcile calendar
+            </button>
+            <button className="primary-button min-h-10 px-3 py-2 text-xs" onClick={() => setCreating(true)}>
+              <Plus size={15} /> New booking
+            </button>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select className="field !w-44 py-2.5 pl-3 pr-8 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
@@ -673,7 +824,7 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
           </select>
           <select className="field !w-44 py-2.5 pl-3 pr-8 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
             <option value="all">All centers</option>
-            {centers.map((c) => <option key={c} value={c}>{c}</option>)}
+            {centerNames.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <div className="flex items-center gap-1.5 text-xs text-slate-500">
             <input type="date" className="field !w-[160px] py-2.5 px-3 text-sm" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
@@ -722,6 +873,11 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
                       </button>
                     )}
                     {!booking.status.startsWith("cancelled") && (
+                      <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-brand-50 hover:text-brand-600" title="Reschedule booking" onClick={() => setRescheduling(booking)}>
+                        <CalendarDays size={15} />
+                      </button>
+                    )}
+                    {!booking.status.startsWith("cancelled") && (
                       <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" title="Cancel booking" disabled={busy === booking.id} onClick={() => act(booking.id, onCancel)}>
                         <X size={16} />
                       </button>
@@ -734,6 +890,23 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
         </table>
       </div>
     </div>
+    {creating && (
+      <NewBookingModal
+        centers={centers}
+        services={services}
+        onClose={() => setCreating(false)}
+        onBooked={() => { setCreating(false); reload(); }}
+      />
+    )}
+    {rescheduling && (
+      <RescheduleModal
+        booking={rescheduling}
+        centers={centers}
+        onClose={() => setRescheduling(null)}
+        onRescheduled={() => { setRescheduling(null); reload(); }}
+      />
+    )}
+    </>
   );
 }
 
@@ -1025,6 +1198,37 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
   const [serviceCenterIds, setServiceCenterIds] = useState<Record<string, string[]>>({});
   const { confirm, dialog } = useConfirm();
 
+  // Local copy of the service order so drag-and-drop feels instant; we persist on
+  // drop and reload from the server (which is the source of truth) afterwards.
+  const [ordered, setOrdered] = useState<Service[]>(services);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  useEffect(() => { setOrdered(services); }, [services]);
+
+  const handleDrop = async (targetId: string) => {
+    const sourceId = dragId;
+    setDragId(null);
+    if (!sourceId || sourceId === targetId) return;
+    const from = ordered.findIndex((s) => s.id === sourceId);
+    const to = ordered.findIndex((s) => s.id === targetId);
+    if (from === -1 || to === -1) return;
+    const next = [...ordered];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setOrdered(next);
+    setSavingOrder(true);
+    try {
+      await adminApi.reorderServices(next.map((s) => s.id));
+      toast.show("success", "Service order updated.");
+      reload();
+    } catch (err) {
+      setOrdered(services); // revert to last known server order
+      toast.show("error", errorMessage(err));
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
   const loadCenterIds = async (serviceId: string): Promise<string[]> => {
     if (serviceCenterIds[serviceId] !== undefined) return serviceCenterIds[serviceId];
     try {
@@ -1058,16 +1262,35 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
     <>
       <div className="card overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
-          <p className="text-sm text-slate-500">Configure duration, price, resources and booking rules.</p>
+          <p className="text-sm text-slate-500">Drag to reorder · Configure duration, price, resources and booking rules.</p>
           <button className="primary-button min-h-10 px-4 py-2" onClick={() => setEditing("new")}><Plus size={16} /> Add service</button>
         </div>
         <div className="divide-y divide-slate-100">
-          {services.map((service) => {
+          {ordered.map((service) => {
             const assignedCenters = (serviceCenterIds[service.id] || [])
               .map((cid) => centers.find((c) => c.id === cid)?.name)
               .filter(Boolean);
             return (
-              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center" key={service.id}>
+              <div
+                className={clsx(
+                  "flex flex-col gap-4 p-5 sm:flex-row sm:items-center transition",
+                  dragId === service.id && "opacity-40",
+                  savingOrder && "pointer-events-none"
+                )}
+                key={service.id}
+                draggable
+                onDragStart={() => setDragId(service.id)}
+                onDragEnd={() => setDragId(null)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => handleDrop(service.id)}
+              >
+                <button
+                  className="hidden shrink-0 cursor-grab touch-none text-slate-300 hover:text-slate-500 active:cursor-grabbing sm:grid sm:place-items-center"
+                  aria-label={`Reorder ${service.name.en}`}
+                  title="Drag to reorder"
+                >
+                  <GripVertical size={18} />
+                </button>
                 <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600"><Gauge size={21} /></div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -2270,7 +2493,7 @@ export default function AdminPortal() {
     if (section === "docs") return <AdminDocs />;
     if (dataLoading) return <ScreenSkeleton />;
     if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} openSection={openSection} />;
-    if (section === "bookings") return <BookingsScreen bookings={bookings} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} />;
+    if (section === "bookings") return <BookingsScreen bookings={bookings} centers={centers} services={services} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} reload={loadAll} />;
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
     if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} centers={centers} reload={loadAll} toast={toast} />;

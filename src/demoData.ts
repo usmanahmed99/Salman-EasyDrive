@@ -45,7 +45,8 @@ export const demoServices: Service[] = [
     formId: "form_road_test",
     cutoffHours: 4,
     cancellationCutoffHours: 24,
-    showDuration: true
+    showDuration: true,
+    sortOrder: 0
   },
   {
     id: "svc_rental",
@@ -64,7 +65,8 @@ export const demoServices: Service[] = [
     formId: "form_rental",
     cutoffHours: 2,
     cancellationCutoffHours: 24,
-    showDuration: true
+    showDuration: true,
+    sortOrder: 1
   },
   {
     id: "svc_lesson",
@@ -83,7 +85,8 @@ export const demoServices: Service[] = [
     formId: "form_lesson",
     cutoffHours: 2,
     cancellationCutoffHours: 12,
-    showDuration: true
+    showDuration: true,
+    sortOrder: 2
   },
   {
     id: "svc_mock",
@@ -101,7 +104,8 @@ export const demoServices: Service[] = [
     enabled: true,
     formId: "form_lesson",
     cutoffHours: 2,
-    showDuration: true
+    showDuration: true,
+    sortOrder: 3
   },
   {
     id: "svc_parking",
@@ -119,7 +123,8 @@ export const demoServices: Service[] = [
     enabled: true,
     formId: "form_lesson",
     cutoffHours: 2,
-    showDuration: true
+    showDuration: true,
+    sortOrder: 4
   },
   {
     id: "svc_highway",
@@ -137,7 +142,8 @@ export const demoServices: Service[] = [
     enabled: true,
     formId: "form_lesson",
     cutoffHours: 2,
-    showDuration: true
+    showDuration: true,
+    sortOrder: 5
   }
 ];
 

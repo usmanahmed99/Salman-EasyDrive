@@ -76,7 +76,8 @@ npx wrangler d1 execute easy-driving-booking --local --command "DELETE FROM rate
 
 ## SEC-06 — Booking rate limit — **P1**
 
-The booking endpoint limit is **12 / 10 min**. Repeating a booking POST > 12 times returns `429`.
+The booking endpoint limit is **20 / 5 min**. Repeating a booking POST > 20 times returns `429`
+with `Too many requests. Please try again in 5 minutes.`
 (Easiest to observe by re-submitting from `/book` rapidly, or scripting the POST like SEC-05
 against `/api/public/bookings`.) Clear `rate_limits` afterward.
 

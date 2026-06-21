@@ -19,6 +19,20 @@ export const bookingRequestSchema = z.object({
   turnstileToken: z.string().optional()
 });
 
+export const adminBookingSchema = z.object({
+  centerSlug: z.string().min(1).max(80),
+  serviceSlug: z.string().min(1).max(80),
+  start: z.string().datetime({ offset: true }),
+  language: z.enum(["en", "fr"]).default("en"),
+  studentName: z.string().min(1).max(120),
+  studentEmail: z.string().email().max(160).optional().or(z.literal("")),
+  studentPhone: z.string().max(40).optional()
+});
+
+export const adminRescheduleSchema = z.object({
+  start: z.string().datetime({ offset: true })
+});
+
 export const overrideRequestSchema = z.object({
   centerId: z.string().min(1),
   serviceId: z.string().nullable().optional(),

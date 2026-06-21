@@ -1,6 +1,7 @@
 import type { BookingForm } from "../shared/types";
 import type { Env } from "./types";
 import { checkExactSlot } from "./availability";
+import type { EvaluatedSlot } from "../shared/availability";
 import { createCalendarEvent, deleteCalendarEvent } from "./google";
 import { addMinutes, HttpError, randomToken, sha256, uuid } from "./utils";
 
@@ -59,24 +60,18 @@ function publicService(service: {
   return { id: service.id, name: { en: service.name_en, fr: service.name_fr } };
 }
 
-export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
-  const context = await checkExactSlot(env, payload.centerSlug, payload.serviceSlug, payload.start);
-  if (!context.slot.available) {
-    throw new HttpError(409, "That time was just booked. Please choose another slot.", "booking_conflict");
-  }
-  const aligned = context.input.businessWindows.some((window) => {
-    const difference = new Date(payload.start).getTime() - new Date(window.start).getTime();
-    return difference >= 0 && difference % (context.service.slot_interval_minutes * 60_000) === 0;
-  });
-  if (!aligned) throw new HttpError(400, "Please choose a listed time slot.", "invalid_slot");
-
-  // Hard DB-level guard: verify no named resource in the planned allocation is
-  // already taken by an overlapping confirmed booking. This runs inside the
-  // Durable Object's serialized execution so it sees all committed allocations.
-  const end = addMinutes(payload.start, context.service.duration_minutes);
-  const operationalStart = addMinutes(payload.start, -context.service.buffer_before_minutes);
-  const operationalEnd = addMinutes(end, context.service.buffer_after_minutes);
-  for (const [groupId, allocation] of Object.entries(context.slot.allocations)) {
+// Hard DB-level guard: verify no named resource in the planned allocation is
+// already taken by an overlapping confirmed booking. This runs inside the
+// Durable Object's serialized execution so it sees all committed allocations.
+// Used by both public and admin booking paths — even an admin cutoff override
+// must not double-book a specific instructor/car.
+async function assertNoResourceConflict(
+  env: Env,
+  allocations: EvaluatedSlot["allocations"],
+  operationalStart: string,
+  operationalEnd: string
+) {
+  for (const [groupId, allocation] of Object.entries(allocations)) {
     if (!Array.isArray(allocation) || allocation.length === 0) continue;
     for (const resourceId of allocation) {
       const conflict = await env.DB.prepare(`
@@ -94,6 +89,23 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
       }
     }
   }
+}
+
+export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
+  const context = await checkExactSlot(env, payload.centerSlug, payload.serviceSlug, payload.start);
+  if (!context.slot.available) {
+    throw new HttpError(409, "That time was just booked. Please choose another slot.", "booking_conflict");
+  }
+  const aligned = context.input.businessWindows.some((window) => {
+    const difference = new Date(payload.start).getTime() - new Date(window.start).getTime();
+    return difference >= 0 && difference % (context.service.slot_interval_minutes * 60_000) === 0;
+  });
+  if (!aligned) throw new HttpError(400, "Please choose a listed time slot.", "invalid_slot");
+
+  const end = addMinutes(payload.start, context.service.duration_minutes);
+  const operationalStart = addMinutes(payload.start, -context.service.buffer_before_minutes);
+  const operationalEnd = addMinutes(end, context.service.buffer_after_minutes);
+  await assertNoResourceConflict(env, context.slot.allocations, operationalStart, operationalEnd);
 
   const formRow = await env.DB.prepare(`
     SELECT form_versions.schema_json FROM forms
@@ -184,6 +196,224 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
     calendarSyncStatus: sync.status,
     manageToken: publicToken
   };
+}
+
+export interface AdminBookingPayload {
+  centerSlug: string;
+  serviceSlug: string;
+  start: string;
+  language: "en" | "fr";
+  studentName: string;
+  studentEmail?: string;
+  studentPhone?: string;
+}
+
+// Reasons evaluateSlot may return that an admin is explicitly allowed to override
+// when force-booking by phone/in person. Anything NOT in this set (e.g. a named
+// resource being unavailable, or pooled capacity exhausted) is a genuine conflict
+// and still blocks, so an override can never double-book a real instructor/car.
+const ADMIN_OVERRIDABLE_REASONS = new Set([
+  "outside_business_hours",
+  "outside_service_hours",
+  "cutoff_exceeded",
+  "center_closed",
+  "service_closed",
+  "service_capacity_full"
+]);
+
+// A minimal synthesised form snapshot so calendar rendering and the admin/student
+// views work for ad-hoc bookings without going through the public service form.
+function adminFormSnapshot(): BookingForm {
+  return {
+    id: "admin_adhoc",
+    name: "Admin ad-hoc booking",
+    version: 0,
+    fields: [
+      { id: "f_name", key: "fullName", type: "text", label: { en: "Full name", fr: "Nom complet" }, required: true, calendarVisible: true, adminListVisible: true, retentionCategory: "contact" },
+      { id: "f_email", key: "email", type: "email", label: { en: "Email", fr: "Courriel" }, required: false, calendarVisible: true, adminListVisible: true, retentionCategory: "contact" },
+      { id: "f_phone", key: "phone", type: "phone", label: { en: "Phone", fr: "Téléphone" }, required: false, calendarVisible: true, adminListVisible: true, retentionCategory: "contact" }
+    ]
+  };
+}
+
+// Admin ad-hoc booking. Bypasses lead-time cutoffs and business-hours/closure
+// gating (see ADMIN_OVERRIDABLE_REASONS) but still refuses to double-book a
+// specific instructor/car or exhaust pooled capacity.
+export async function confirmAdminBooking(env: Env, payload: AdminBookingPayload) {
+  const context = await checkExactSlot(env, payload.centerSlug, payload.serviceSlug, payload.start);
+  const blockingReasons = context.slot.reasons.filter((reason) => !ADMIN_OVERRIDABLE_REASONS.has(reason));
+  if (blockingReasons.length) {
+    throw new HttpError(409, "The selected resource is already booked at this time.", "booking_conflict");
+  }
+
+  const end = addMinutes(payload.start, context.service.duration_minutes);
+  const operationalStart = addMinutes(payload.start, -context.service.buffer_before_minutes);
+  const operationalEnd = addMinutes(end, context.service.buffer_after_minutes);
+  await assertNoResourceConflict(env, context.slot.allocations, operationalStart, operationalEnd);
+
+  const id = uuid();
+  const reference = `ED-${Math.floor(100000 + Math.random() * 900000)}`;
+  const publicToken = randomToken(32);
+  const tokenHash = await sha256(publicToken);
+  const form = adminFormSnapshot();
+  const answers: Record<string, unknown> = {
+    fullName: payload.studentName,
+    email: payload.studentEmail || "",
+    phone: payload.studentPhone || ""
+  };
+
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(`
+      INSERT INTO bookings(
+        id, reference, center_id, service_id, start_at, end_at, operational_start_at,
+        operational_end_at, timezone, language, status, form_version,
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending')
+    `).bind(
+      id, reference, context.center.id, context.service.id, payload.start, end,
+      operationalStart, operationalEnd, context.center.timezone, payload.language,
+      form.version, JSON.stringify(form), tokenHash, publicToken
+    ),
+    env.DB.prepare(`
+      INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(id, JSON.stringify(answers), payload.studentName, payload.studentEmail || "", payload.studentPhone || "")
+  ];
+
+  for (const requirement of context.input.requirements) {
+    const allocation = context.slot.allocations[requirement.groupId];
+    if (Array.isArray(allocation)) {
+      allocation.forEach((resourceId) => {
+        statements.push(env.DB.prepare(`
+          INSERT INTO booking_resource_allocations(
+            id, booking_id, resource_group_id, resource_id, units, start_at, end_at
+          ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        `).bind(uuid(), id, requirement.groupId, resourceId, operationalStart, operationalEnd));
+      });
+    } else {
+      statements.push(env.DB.prepare(`
+        INSERT INTO booking_resource_allocations(
+          id, booking_id, resource_group_id, resource_id, units, start_at, end_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?)
+      `).bind(uuid(), id, requirement.groupId, Number(allocation) || requirement.units, operationalStart, operationalEnd));
+    }
+  }
+  await env.DB.batch(statements);
+
+  const sync = await syncBookingCalendar(env, id, publicToken).catch(async (error: unknown) => {
+    const message = error instanceof Error ? error.message : "Calendar sync failed";
+    await env.DB.prepare(`
+      UPDATE bookings SET status = 'calendar_sync_failed', calendar_sync_status = 'failed',
+      calendar_last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(message.slice(0, 500), id).run();
+    return { status: "failed" as const, error: message };
+  });
+
+  return {
+    id,
+    reference,
+    status: sync.status === "failed" ? "calendar_sync_failed" : "confirmed",
+    start: payload.start,
+    end,
+    centerName: context.center.name,
+    serviceName: payload.language === "fr" ? context.service.name_fr : context.service.name_en,
+    calendarSyncStatus: sync.status,
+    manageToken: publicToken
+  };
+}
+
+export interface AdminRescheduleResult {
+  id: string;
+  reference: string;
+  status: string;
+  start: string;
+  end: string;
+  calendarSyncStatus: "pending" | "synced" | "failed";
+}
+
+// Admin reschedule of an existing booking to a new time. Keeps the same service,
+// center and student; re-checks resource conflicts at the new time (cutoffs and
+// closures are overridable, real double-bookings are not); rebuilds resource
+// allocations; and moves the calendar events by tearing down the old ones and
+// re-syncing fresh ones at the new time.
+export async function rescheduleAdminBooking(env: Env, bookingId: string, newStart: string) {
+  const booking = await env.DB.prepare(`
+    SELECT bookings.id, bookings.reference, bookings.center_id, bookings.timezone, bookings.manage_token,
+      centers.slug AS center_slug, services.slug AS service_slug
+    FROM bookings
+    JOIN centers ON centers.id = bookings.center_id
+    JOIN services ON services.id = bookings.service_id
+    WHERE bookings.id = ?
+  `).bind(bookingId).first<{
+    id: string; reference: string; center_id: string; timezone: string; manage_token: string | null;
+    center_slug: string; service_slug: string;
+  }>();
+  if (!booking) throw new HttpError(404, "Booking not found.");
+
+  const context = await checkExactSlot(env, booking.center_slug, booking.service_slug, newStart);
+  const blockingReasons = context.slot.reasons.filter((reason) => !ADMIN_OVERRIDABLE_REASONS.has(reason));
+  if (blockingReasons.length) {
+    throw new HttpError(409, "The selected resource is already booked at this time.", "booking_conflict");
+  }
+
+  const end = addMinutes(newStart, context.service.duration_minutes);
+  const operationalStart = addMinutes(newStart, -context.service.buffer_before_minutes);
+  const operationalEnd = addMinutes(end, context.service.buffer_after_minutes);
+
+  // Remove this booking's existing allocations and calendar events first so the
+  // conflict check and the re-sync see a clean slate (a resource can't conflict
+  // with its own old slot, and the calendar shouldn't end up with stale events).
+  await cancelBookingCalendar(env, bookingId).catch((error: unknown) => {
+    console.error("[reschedule] calendar cleanup failed", error);
+  });
+  await env.DB.prepare("DELETE FROM booking_resource_allocations WHERE booking_id = ?").bind(bookingId).run();
+
+  await assertNoResourceConflict(env, context.slot.allocations, operationalStart, operationalEnd);
+
+  const statements: D1PreparedStatement[] = [
+    env.DB.prepare(`
+      UPDATE bookings SET start_at=?, end_at=?, operational_start_at=?, operational_end_at=?,
+        status='confirmed', calendar_sync_status='pending', calendar_last_error=NULL, updated_at=CURRENT_TIMESTAMP
+      WHERE id=?
+    `).bind(newStart, end, operationalStart, operationalEnd, bookingId)
+  ];
+  for (const requirement of context.input.requirements) {
+    const allocation = context.slot.allocations[requirement.groupId];
+    if (Array.isArray(allocation)) {
+      allocation.forEach((resourceId) => {
+        statements.push(env.DB.prepare(`
+          INSERT INTO booking_resource_allocations(
+            id, booking_id, resource_group_id, resource_id, units, start_at, end_at
+          ) VALUES (?, ?, ?, ?, 1, ?, ?)
+        `).bind(uuid(), bookingId, requirement.groupId, resourceId, operationalStart, operationalEnd));
+      });
+    } else {
+      statements.push(env.DB.prepare(`
+        INSERT INTO booking_resource_allocations(
+          id, booking_id, resource_group_id, resource_id, units, start_at, end_at
+        ) VALUES (?, ?, ?, NULL, ?, ?, ?)
+      `).bind(uuid(), bookingId, requirement.groupId, Number(allocation) || requirement.units, operationalStart, operationalEnd));
+    }
+  }
+  await env.DB.batch(statements);
+
+  const sync = await syncBookingCalendar(env, bookingId, booking.manage_token || undefined).catch(async (error: unknown) => {
+    const message = error instanceof Error ? error.message : "Calendar sync failed";
+    await env.DB.prepare(`
+      UPDATE bookings SET status='calendar_sync_failed', calendar_sync_status='failed',
+      calendar_last_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+    `).bind(message.slice(0, 500), bookingId).run();
+    return { status: "failed" as const };
+  });
+
+  return {
+    id: bookingId,
+    reference: booking.reference,
+    status: sync.status === "failed" ? "calendar_sync_failed" : "confirmed",
+    start: newStart,
+    end,
+    calendarSyncStatus: sync.status
+  } satisfies AdminRescheduleResult;
 }
 
 export async function syncBookingCalendar(env: Env, bookingId: string, knownPublicToken?: string) {
@@ -361,6 +591,7 @@ export function serviceResponse(service: {
   cutoff_hours: number;
   cancellation_cutoff_hours: number | null;
   show_duration: number;
+  sort_order?: number;
 }) {
   return {
     id: service.id,
@@ -377,6 +608,7 @@ export function serviceResponse(service: {
     formId: service.form_id,
     cutoffHours: service.cutoff_hours,
     cancellationCutoffHours: service.cancellation_cutoff_hours || undefined,
-    showDuration: service.show_duration !== 0
+    showDuration: service.show_duration !== 0,
+    sortOrder: service.sort_order ?? 0
   };
 }

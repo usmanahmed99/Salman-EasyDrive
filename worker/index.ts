@@ -1,8 +1,8 @@
-import { availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, resourceMutationSchema } from "../shared/schemas";
+import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, resourceMutationSchema } from "../shared/schemas";
 import type { BookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
-import { cancelBookingCalendar, confirmBooking, serviceResponse, syncBookingCalendar, type ConfirmBookingPayload } from "./booking";
+import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
 import { reconcileCalendar } from "./reconcile";
 import type { DbCenter, DbService, Env } from "./types";
@@ -31,7 +31,7 @@ async function rateLimit(request: Request, env: Env, limit: number, windowMinute
   const key = await sha256(`${ip}:${route}:${bucket}`);
   const current = await env.DB.prepare("SELECT request_count FROM rate_limits WHERE key = ?").bind(key).first<{ request_count: number }>();
   if (current && current.request_count >= limit) {
-    throw new HttpError(429, "Too many requests. Please wait a moment and try again.", "rate_limited");
+    throw new HttpError(429, `Too many requests. Please try again in ${windowMinutes} minutes.`, "rate_limited");
   }
   await env.DB.prepare(`
     INSERT INTO rate_limits(key, window_start, request_count) VALUES (?, CURRENT_TIMESTAMP, 1)
@@ -154,10 +154,23 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     }
   }
 
+  if (path === "/api/admin/services/reorder" && method === "PUT") {
+    const body = await readJson(request) as { orderedIds?: unknown };
+    const orderedIds = Array.isArray(body.orderedIds) ? body.orderedIds.map(String) : [];
+    if (!orderedIds.length) throw new HttpError(400, "orderedIds is required.");
+    await env.DB.batch(
+      orderedIds.map((serviceId, index) =>
+        env.DB.prepare("UPDATE services SET sort_order=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL").bind(index, serviceId)
+      )
+    );
+    await audit(env, user.id, "reorder", "service", "", { orderedIds }, request);
+    return json({ ok: true });
+  }
+
   if (path.startsWith("/api/admin/services")) {
     const id = parseId(path, "/api/admin/services");
     if (method === "GET") {
-      const results = await env.DB.prepare("SELECT * FROM services WHERE deleted_at IS NULL ORDER BY name_en").all<DbService>();
+      const results = await env.DB.prepare("SELECT * FROM services WHERE deleted_at IS NULL ORDER BY sort_order, name_en").all<DbService>();
       return json({ services: results.results.map(serviceResponse) });
     }
     const body = await readJson(request) as Record<string, unknown>;
@@ -182,13 +195,16 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     if (!values.slug || !values.nameEn) throw new HttpError(400, "Service name and slug are required.");
     if (method === "POST") {
       const nextId = uuid();
+      // New services sort to the end of the current order until reordered.
+      const maxRow = await env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) AS max FROM services WHERE deleted_at IS NULL").first<{ max: number }>();
+      const nextSortOrder = (maxRow?.max ?? -1) + 1;
       await env.DB.prepare(`
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
           buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display,
-          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration).run();
+          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, nextSortOrder).run();
       // Offer the new service at every existing center by default (mirrors center creation).
       const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
       for (const ctr of allCenters.results) {
@@ -380,7 +396,7 @@ async function route(request: Request, env: Env): Promise<Response> {
             SELECT 1 FROM service_centers WHERE service_centers.service_id=services.id
           )
         )
-      ORDER BY services.name_en
+      ORDER BY services.sort_order, services.name_en
     `).bind(centerSlug).all<DbService>();
     return json(results.results.map(serviceResponse));
   }
@@ -401,7 +417,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     return json({ slots: result.slots });
   }
   if (path === "/api/public/bookings" && method === "POST") {
-    await rateLimit(request, env, 12, 10);
+    await rateLimit(request, env, 20, 5);
     const payload = bookingRequestSchema.parse(await readJson(request));
     await verifyTurnstile(request, env, payload.turnstileToken);
     const center = await env.DB.prepare("SELECT id, timezone FROM centers WHERE slug=? AND enabled=1").bind(payload.centerSlug).first<{ id: string; timezone: string }>();
@@ -599,6 +615,39 @@ async function route(request: Request, env: Env): Promise<Response> {
       return json(summary);
     }
 
+    // Ad-hoc admin booking. Routed through the BookingLock Durable Object so the
+    // resource-conflict check is serialised against concurrent public bookings.
+    // Cutoffs/closures are overridable; genuine resource double-bookings are not.
+    if (path === "/api/admin/bookings" && method === "POST") {
+      const payload = adminBookingSchema.parse(await readJson(request));
+      const center = await env.DB.prepare("SELECT id, timezone FROM centers WHERE slug=?").bind(payload.centerSlug).first<{ id: string; timezone: string }>();
+      if (!center) throw new HttpError(404, "Location is unavailable.");
+      const durableId = env.BOOKING_LOCK.idFromName(`center:${center.id}:${dateInTimeZone(payload.start, center.timezone)}`);
+      const response = await env.BOOKING_LOCK.get(durableId).fetch("https://booking-lock.internal/admin-confirm", {
+        method: "POST",
+        body: JSON.stringify(payload)
+      });
+      if (response.ok) await audit(env, user.id, "create", "booking", "", payload, request);
+      return new Response(response.body, { status: response.status, headers: { "Content-Type": "application/json" } });
+    }
+
+    const adminRescheduleMatch = path.match(/^\/api\/admin\/bookings\/([^/]+)\/reschedule$/);
+    if (adminRescheduleMatch && method === "POST") {
+      const { start } = adminRescheduleSchema.parse(await readJson(request));
+      const booking = await env.DB.prepare(
+        "SELECT center_id, timezone FROM bookings WHERE id=?"
+      ).bind(adminRescheduleMatch[1]).first<{ center_id: string; timezone: string }>();
+      if (!booking) throw new HttpError(404, "Booking not found.");
+      // Serialise against the target day's lock so a reschedule can't race a public booking onto the same resource.
+      const durableId = env.BOOKING_LOCK.idFromName(`center:${booking.center_id}:${dateInTimeZone(start, booking.timezone)}`);
+      const result = await env.BOOKING_LOCK.get(durableId).fetch("https://booking-lock.internal/admin-reschedule", {
+        method: "POST",
+        body: JSON.stringify({ bookingId: adminRescheduleMatch[1], start })
+      });
+      if (result.ok) await audit(env, user.id, "reschedule", "booking", adminRescheduleMatch[1], { start }, request);
+      return new Response(result.body, { status: result.status, headers: { "Content-Type": "application/json" } });
+    }
+
     if (path.startsWith("/api/admin/resource-groups")) {
       const id = parseId(path, "/api/admin/resource-groups");
       if (method === "GET") {
@@ -787,7 +836,18 @@ export class BookingLock {
 
   async fetch(request: Request) {
     if (request.method !== "POST") return json({ error: "Method not allowed" }, 405);
+    const route = new URL(request.url).pathname;
     try {
+      if (route === "/admin-confirm") {
+        const payload = adminBookingSchema.parse(await request.json()) as AdminBookingPayload;
+        const result = await this.state.blockConcurrencyWhile(() => confirmAdminBooking(this.env, payload));
+        return json(result, 201);
+      }
+      if (route === "/admin-reschedule") {
+        const body = await request.json() as { bookingId: string; start: string };
+        const result = await this.state.blockConcurrencyWhile(() => rescheduleAdminBooking(this.env, body.bookingId, body.start));
+        return json(result, 200);
+      }
       const payload = bookingRequestSchema.parse(await request.json()) as ConfirmBookingPayload;
       const result = await this.state.blockConcurrencyWhile(() => confirmBooking(this.env, payload));
       return json(result, 201);

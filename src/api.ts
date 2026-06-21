@@ -162,6 +162,8 @@ export const adminApi = {
   updateService: (id: string, payload: Record<string, unknown>) =>
     request(`/api/admin/services/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteService: (id: string) => request(`/api/admin/services/${id}`, { method: "DELETE" }),
+  reorderServices: (orderedIds: string[]) =>
+    request("/api/admin/services/reorder", { method: "PUT", body: JSON.stringify({ orderedIds }) }),
   serviceRequirements: (serviceId: string) =>
     request<{ requirements: Array<{ resource_type: string; units: number }> }>(`/api/admin/service-requirements?serviceId=${encodeURIComponent(serviceId)}`),
   saveServiceRequirements: (serviceId: string, requirements: Array<{ resource_type: string; units: number }>) =>
@@ -213,6 +215,14 @@ export const adminApi = {
     request("/api/admin/retention", { method: "PATCH", body: JSON.stringify({ retentionDays }) }),
 
   // Bookings actions
+  createAdminBooking: (payload: {
+    centerSlug: string; serviceSlug: string; start: string; language?: "en" | "fr";
+    studentName: string; studentEmail?: string; studentPhone?: string;
+  }) => request<{ id: string; reference: string; status: string; start: string; end: string; calendarSyncStatus: string }>(
+    "/api/admin/bookings", { method: "POST", body: JSON.stringify(payload) }),
+  rescheduleBooking: (id: string, start: string) =>
+    request<{ id: string; reference: string; status: string; start: string; calendarSyncStatus: string }>(
+      `/api/admin/bookings/${id}/reschedule`, { method: "POST", body: JSON.stringify({ start }) }),
   resyncBooking: (id: string) => request(`/api/admin/bookings/${id}/resync-calendar`, { method: "POST" }),
   cancelBooking: (id: string) => request(`/api/admin/bookings/${id}/cancel`, { method: "POST" }),
   reconcileBookings: () => request<{ checked: number; cleaned: number; skipped: number }>("/api/admin/bookings/reconcile", { method: "POST" })

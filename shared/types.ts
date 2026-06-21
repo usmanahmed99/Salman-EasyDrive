@@ -30,6 +30,7 @@ export interface Service {
   cutoffHours: number;
   cancellationCutoffHours?: number;
   showDuration: boolean;
+  sortOrder: number;
 }
 
 export type FormFieldType =
