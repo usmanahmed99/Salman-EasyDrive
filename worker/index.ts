@@ -174,6 +174,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       price: body.priceDisplay ? String(body.priceDisplay) : null,
       formId: String(body.formId || "form_lesson"),
       cutoff: Number(body.cutoffHours || 0),
+      cancellationCutoff: body.cancellationCutoffHours == null ? null : Number(body.cancellationCutoffHours),
       concurrency: Number(body.baseConcurrency || 1),
       enabled: body.enabled === false ? 0 : 1,
       showDuration: body.showDuration === false ? 0 : 1
@@ -185,9 +186,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
           buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display,
-          form_id, cutoff_hours, base_concurrency, enabled, show_duration
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration).run();
+          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration).run();
       // Offer the new service at every existing center by default (mirrors center creation).
       const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
       for (const ctr of allCenters.results) {
@@ -201,9 +202,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare(`
         UPDATE services SET name_en=?, name_fr=?, description_en=?, description_fr=?,
         duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
-        price_display=?, form_id=?, cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
+        price_display=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration, id).run();
+      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }
