@@ -446,17 +446,22 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (path === "/api/admin/me" && method === "GET") return json({ user });
     if (path === "/api/admin/bookings" && method === "GET") {
       const results = await env.DB.prepare(`
-        SELECT bookings.id, bookings.reference, bookings.start_at, bookings.status,
+        SELECT bookings.id, bookings.reference, bookings.start_at, bookings.created_at, bookings.status,
           services.name_en AS service, centers.name AS center,
           COALESCE(booking_form_responses.student_name, 'Private') AS student
         FROM bookings JOIN services ON services.id=bookings.service_id
         JOIN centers ON centers.id=bookings.center_id
         LEFT JOIN booking_form_responses ON booking_form_responses.booking_id=bookings.id
-        ORDER BY bookings.start_at DESC LIMIT 250
+        ORDER BY bookings.start_at DESC LIMIT 500
       `).all<Record<string, string>>();
+      const fmt = new Intl.DateTimeFormat("en-CA", { hour: "numeric", minute: "2-digit", timeZone: "America/Montreal" });
+      const dateFmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "short", day: "numeric", timeZone: "America/Montreal" });
+      const bookedFmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Montreal" });
       return json({ bookings: results.results.map((booking) => ({
         ...booking,
-        time: new Intl.DateTimeFormat("en-CA", { hour: "numeric", minute: "2-digit", timeZone: "America/Montreal" }).format(new Date(booking.start_at))
+        time: fmt.format(new Date(booking.start_at)),
+        date: dateFmt.format(new Date(booking.start_at)),
+        booked_at: bookedFmt.format(new Date(booking.created_at)),
       })) });
     }
     if (path === "/api/admin/overrides" && method === "GET") {

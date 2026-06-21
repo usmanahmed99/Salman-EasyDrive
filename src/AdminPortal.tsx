@@ -63,6 +63,9 @@ interface AdminBooking {
   id: string;
   reference: string;
   time: string;
+  date: string;
+  start_at: string;
+  booked_at: string;
   student: string;
   service: string;
   center: string;
@@ -521,8 +524,8 @@ function TodayDashboard({
   );
 }
 
-function bookingDate(booking: AdminBooking & { start_at?: string }) {
-  return (booking.start_at || "").slice(0, 10);
+function bookingDate(booking: AdminBooking) {
+  return booking.start_at.slice(0, 10);
 }
 
 /* -------------------------------------------------------------------------- */
@@ -531,10 +534,26 @@ function bookingDate(booking: AdminBooking & { start_at?: string }) {
 
 function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooking[]; onResync: (id: string) => Promise<void>; onCancel: (id: string) => Promise<void> }) {
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [centerFilter, setCenterFilter] = useState("all");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
-  const filtered = bookings.filter((booking) =>
-    !query || `${booking.student} ${booking.reference} ${booking.service} ${booking.center}`.toLowerCase().includes(query.toLowerCase())
-  );
+
+  const centers = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
+  const statuses = useMemo(() => Array.from(new Set(bookings.map((b) => b.status))).sort(), [bookings]);
+
+  const filtered = useMemo(() => bookings.filter((booking) => {
+    if (query && !`${booking.student} ${booking.reference} ${booking.service} ${booking.center}`.toLowerCase().includes(query.toLowerCase())) return false;
+    if (statusFilter !== "all" && booking.status !== statusFilter) return false;
+    if (centerFilter !== "all" && booking.center !== centerFilter) return false;
+    if (dateFrom && booking.start_at < dateFrom) return false;
+    if (dateTo && booking.start_at > dateTo + "T23:59:59") return false;
+    return true;
+  }), [bookings, query, statusFilter, centerFilter, dateFrom, dateTo]);
+
+  const hasFilters = statusFilter !== "all" || centerFilter !== "all" || dateFrom || dateTo;
+  const clearFilters = () => { setStatusFilter("all"); setCenterFilter("all"); setDateFrom(""); setDateTo(""); setQuery(""); };
 
   const act = async (id: string, fn: (id: string) => Promise<void>) => {
     setBusy(id);
@@ -543,29 +562,52 @@ function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooki
 
   return (
     <div className="card overflow-hidden">
-      <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
-        <div className="relative max-w-md flex-1">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <input className="field py-2.5 pl-10 pr-4" placeholder="Search name or booking reference" value={query} onChange={(event) => setQuery(event.target.value)} />
+      <div className="flex flex-col gap-3 border-b border-slate-100 p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative max-w-md flex-1">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input className="field py-2.5 pl-10 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select className="field py-2 pr-8 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="all">All statuses</option>
+              {statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
+            </select>
+            <select className="field py-2 pr-8 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
+              <option value="all">All centers</option>
+              {centers.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <input type="date" className="field py-2 text-sm" title="Appointment from" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="field py-2 text-sm" title="Appointment to" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            {hasFilters && (
+              <button className="flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800" onClick={clearFilters}>
+                <X size={13} /> Clear
+              </button>
+            )}
+          </div>
         </div>
-        <p className="text-xs text-slate-500">{filtered.length} of {bookings.length}</p>
+        <p className="text-xs text-slate-500">{filtered.length} of {bookings.length} bookings</p>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[820px] text-left">
+        <table className="w-full min-w-[960px] text-left">
           <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-400">
             <tr>
-              {["Time", "Student", "Service", "Center", "Reference", "Status", ""].map((heading, index) => <th className="px-5 py-3" key={index}>{heading}</th>)}
+              {["Date & Time", "Student", "Service", "Center", "Reference", "Booked on", "Status", ""].map((heading, index) => <th className="px-5 py-3" key={index}>{heading}</th>)}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
-            {filtered.length === 0 && <tr><td colSpan={7} className="px-5 py-10 text-center text-slate-400">No bookings found.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={8} className="px-5 py-10 text-center text-slate-400">No bookings found.</td></tr>}
             {filtered.map((booking) => (
               <tr className="hover:bg-slate-50" key={booking.id}>
-                <td className="px-5 py-4 font-bold text-ink">{booking.time}</td>
+                <td className="px-5 py-4">
+                  <span className="font-bold text-ink">{booking.time}</span>
+                  <span className="ml-1.5 text-xs text-slate-400">{booking.date}</span>
+                </td>
                 <td className="px-5 py-4 font-semibold text-ink">{booking.student}</td>
                 <td className="px-5 py-4 text-slate-600">{booking.service}</td>
                 <td className="px-5 py-4 text-slate-600">{booking.center}</td>
                 <td className="px-5 py-4 font-mono text-xs text-slate-500">{booking.reference}</td>
+                <td className="px-5 py-4 text-xs text-slate-400">{booking.booked_at}</td>
                 <td className="px-5 py-4"><StatusBadge status={booking.status} /></td>
                 <td className="px-5 py-4">
                   <div className="flex items-center justify-end gap-1.5">
