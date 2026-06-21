@@ -524,8 +524,8 @@ function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooki
     <div className="card overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
         <div className="relative max-w-md flex-1">
-          <Search className="absolute left-3.5 top-3.5 text-slate-400" size={17} />
-          <input className="field pl-10" placeholder="Search name or booking reference" value={query} onChange={(event) => setQuery(event.target.value)} />
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+          <input className="field py-2.5 pl-10 pr-4" placeholder="Search name or booking reference" value={query} onChange={(event) => setQuery(event.target.value)} />
         </div>
         <p className="text-xs text-slate-500">{filtered.length} of {bookings.length}</p>
       </div>
