@@ -149,6 +149,29 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
+/** Read-only slug display with a copy button. Slugs are immutable identifiers after creation. */
+function ReadonlySlug({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard unavailable */ }
+  };
+  return (
+    <div className="block">
+      <span className="label">{label}</span>
+      <div className="flex items-center gap-2">
+        <input className="field flex-1 cursor-default bg-slate-50 font-mono text-slate-500" value={value} readOnly tabIndex={-1} onFocus={(e) => e.target.blur()} />
+        <button type="button" className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-ink" title="Copy slug" onClick={copy}>
+          {copied ? <Check size={15} className="text-emerald-600" /> : <Copy size={15} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Banner({ kind, message, onClose }: { kind: "error" | "success"; message: string; onClose?: () => void }) {
   return (
     <div className={clsx(
@@ -750,7 +773,9 @@ function CenterModal({ center, onClose, onSaved }: { center: Center | null; onCl
       {error && <Banner kind="error" message={error} onClose={() => setError("")} />}
       <div className="grid gap-5 sm:grid-cols-2">
         <Field label="Center name"><input className="field" value={name} onChange={(event) => { setName(event.target.value); if (!center && !slug) setSlug(slugify(event.target.value)); }} /></Field>
-        <Field label="Slug (URL)"><input className="field" value={slug} onChange={(event) => setSlug(slugify(event.target.value))} placeholder="laval" /></Field>
+        {center
+          ? <ReadonlySlug label="Slug (URL) · locked" value={slug} />
+          : <Field label="Slug (URL)"><input className="field" value={slug} onChange={(event) => setSlug(slugify(event.target.value))} placeholder="laval" /></Field>}
         <label className="block sm:col-span-2"><span className="label">Address</span><input className="field" value={address} onChange={(event) => setAddress(event.target.value)} /></label>
         <Field label="Timezone"><input className="field" value={timezone} onChange={(event) => setTimezone(event.target.value)} /></Field>
         <Field label="Status">
@@ -906,7 +931,9 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
         <Field label="Name (French)"><input className="field" value={v.nameFr} onChange={(event) => set("nameFr", event.target.value)} /></Field>
         <label className="block sm:col-span-2"><span className="label">Description (English)</span><textarea className="field" rows={2} value={v.descriptionEn} onChange={(event) => set("descriptionEn", event.target.value)} /></label>
         <label className="block sm:col-span-2"><span className="label">Description (French)</span><textarea className="field" rows={2} value={v.descriptionFr} onChange={(event) => set("descriptionFr", event.target.value)} /></label>
-        <Field label="Slug (URL)"><input className="field" value={v.slug} onChange={(event) => set("slug", slugify(event.target.value))} /></Field>
+        {service
+          ? <ReadonlySlug label="Slug (URL) · locked" value={v.slug} />
+          : <Field label="Slug (URL)"><input className="field" value={v.slug} onChange={(event) => set("slug", slugify(event.target.value))} /></Field>}
         <Field label="Price (display)"><input className="field" value={v.priceDisplay} onChange={(event) => set("priceDisplay", event.target.value)} placeholder="$80" /></Field>
         <Field label="Duration (minutes)"><input className="field" type="number" value={v.durationMinutes} onChange={(event) => set("durationMinutes", Number(event.target.value))} /></Field>
         <Field label="Booking form">

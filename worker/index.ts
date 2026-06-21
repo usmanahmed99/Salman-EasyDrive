@@ -125,9 +125,10 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     }
     if (method === "PATCH" && id) {
       const payload = centerMutationSchema.parse(await readJson(request));
+      // Slug is an immutable identifier (booking URLs, availability lookups); never updated.
       await env.DB.prepare(`
-        UPDATE centers SET name = ?, slug = ?, address = ?, timezone = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `).bind(payload.name, payload.slug, payload.address || null, payload.timezone, Number(payload.enabled), id).run();
+        UPDATE centers SET name = ?, address = ?, timezone = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(payload.name, payload.address || null, payload.timezone, Number(payload.enabled), id).run();
       await audit(env, user.id, "update", "center", id, payload, request);
       return json({ id, ...payload });
     }
@@ -195,12 +196,13 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       return json({ id: nextId }, 201);
     }
     if (method === "PATCH" && id) {
+      // Slug is an immutable identifier (booking URLs, availability lookups); never updated.
       await env.DB.prepare(`
-        UPDATE services SET slug=?, name_en=?, name_fr=?, description_en=?, description_fr=?,
+        UPDATE services SET name_en=?, name_fr=?, description_en=?, description_fr=?,
         duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
         price_display=?, form_id=?, cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration, id).run();
+      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }
