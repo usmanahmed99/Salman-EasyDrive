@@ -1049,7 +1049,56 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  // School closures state
+  const [closures, setClosures] = useState<Array<Record<string, string>>>([]);
+  const [closureStart, setClosureStart] = useState("");
+  const [closureEnd, setClosureEnd] = useState("");
+  const [closureReason, setClosureReason] = useState("");
+  const [addingClosure, setAddingClosure] = useState(false);
+
   useEffect(() => { if (!centerId && centers[0]) setCenterId(centers[0].id); }, [centers, centerId]);
+
+  const loadClosures = useCallback((cid: string) => {
+    adminApi.overrides().then((result) => {
+      setClosures(result.overrides.filter((o) => o.type === "center_closed" && o.center_id === cid));
+    }).catch(() => undefined);
+  }, []);
+
+  useEffect(() => { if (centerId) loadClosures(centerId); }, [centerId, loadClosures]);
+
+  const addClosure = async () => {
+    if (!closureStart || !closureEnd) { toast.show("error", "Select a start and end date."); return; }
+    if (closureEnd < closureStart) { toast.show("error", "End date must be after start date."); return; }
+    setAddingClosure(true);
+    try {
+      await adminApi.createOverride({
+        centerId,
+        type: "center_closed",
+        startAt: new Date(`${closureStart}T00:00:00`).toISOString(),
+        endAt: new Date(`${closureEnd}T23:59:59`).toISOString(),
+        reason: closureReason || undefined
+      });
+      setClosureStart("");
+      setClosureEnd("");
+      setClosureReason("");
+      loadClosures(centerId);
+      toast.show("success", "Closure added.");
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setAddingClosure(false);
+    }
+  };
+
+  const removeClosure = async (id: string) => {
+    try {
+      await adminApi.deleteOverride(id);
+      setClosures((current) => current.filter((c) => c.id !== id));
+      toast.show("success", "Closure removed.");
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    }
+  };
 
   useEffect(() => {
     if (!centerId) return;
@@ -1110,6 +1159,60 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
         )}
         <div className="flex justify-end border-t border-slate-100 p-5">
           <button className="primary-button" disabled={saving || loading} onClick={save}>{saving && <LoaderCircle className="animate-spin" size={16} />} Save business hours</button>
+        </div>
+      </div>
+
+      <div className="card overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-slate-100 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h2 className="font-extrabold text-ink">School closures</h2>
+            <p className="mt-1 text-xs text-slate-500">Block entire date ranges — no availability will be shown to students during these periods.</p>
+          </div>
+          <p className="text-sm font-semibold text-slate-500">{centers.find((c) => c.id === centerId)?.name}</p>
+        </div>
+
+        <div className="divide-y divide-slate-100">
+          {closures.length === 0 && (
+            <p className="px-5 py-6 text-center text-sm text-slate-400">No closures scheduled for this center.</p>
+          )}
+          {closures.map((closure) => {
+            const start = new Date(closure.start_at);
+            const end = new Date(closure.end_at);
+            const fmt = (d: Date) => d.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" });
+            const isSameDay = start.toDateString() === end.toDateString();
+            return (
+              <div className="flex items-center gap-4 px-5 py-4" key={closure.id}>
+                <div className="flex-1">
+                  <p className="text-sm font-bold text-ink">{isSameDay ? fmt(start) : `${fmt(start)} – ${fmt(end)}`}</p>
+                  {closure.reason && <p className="mt-0.5 text-xs text-slate-500">{closure.reason}</p>}
+                </div>
+                <button className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => removeClosure(closure.id)}><Trash2 size={15} /></button>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="border-t border-slate-100 p-5">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">Add closure</p>
+          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto]">
+            <div>
+              <label className="label">From</label>
+              <input type="date" className="field" value={closureStart} onChange={(e) => setClosureStart(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">To</label>
+              <input type="date" className="field" value={closureEnd} min={closureStart} onChange={(e) => setClosureEnd(e.target.value)} />
+            </div>
+            <div>
+              <label className="label">Reason (optional)</label>
+              <input className="field" placeholder="e.g. Spring break" value={closureReason} onChange={(e) => setClosureReason(e.target.value)} />
+            </div>
+            <div className="flex items-end">
+              <button className="primary-button w-full" disabled={addingClosure || !closureStart || !closureEnd} onClick={addClosure}>
+                {addingClosure ? <LoaderCircle className="animate-spin" size={16} /> : <Plus size={16} />} Add
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
