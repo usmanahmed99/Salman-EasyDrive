@@ -25,7 +25,7 @@ crons = ["17 5 * * *"]
 
 [vars]
 APP_BASE_URL = "https://easydriving.nextiadriveops.com"
-PUBLIC_SITE_ORIGIN = "https://easydriving.nextiadriveops.com"
+PUBLIC_SITE_ORIGIN = "https://easydriving.nextiadriveops.com,https://easydriving.ca,https://www.easydriving.ca"
 GOOGLE_REDIRECT_URI = "https://easydriving.nextiadriveops.com/api/auth/google/callback"
 DEFAULT_TIMEZONE = "America/Montreal"
 ADMIN_EMAILS = "easydrivingca@gmail.com,monsieur.usman.ahmed@gmail.com"

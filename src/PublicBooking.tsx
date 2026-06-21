@@ -385,6 +385,7 @@ export default function PublicBooking() {
   const [language, setLanguage] = useState<Language>(getLanguage());
   const t = copy[language];
   const query = useMemo(() => new URLSearchParams(window.location.search), []);
+  const embedded = query.get("embed") === "1";
   const preselectedCenter = query.get("center");
   const preselectedService = query.get("service");
   const [config, setConfig] = useState<PublicConfig>();
@@ -511,14 +512,14 @@ export default function PublicBooking() {
   if (stage === "confirmed" && confirmation) {
     return (
       <div className="min-h-screen bg-white">
-        <header className="border-b border-slate-100 px-5 py-4">
+        {!embedded && <header className="border-b border-slate-100 px-5 py-4">
           <div className="mx-auto flex max-w-5xl items-center justify-between">
             <Logo />
             <button className="secondary-button min-h-10 px-3 py-2" onClick={() => setLanguage(language === "en" ? "fr" : "en")}>
               <Languages size={17} /> {language === "en" ? "FR" : "EN"}
             </button>
           </div>
-        </header>
+        </header>}
         <main className="mx-auto max-w-2xl px-5 py-12 sm:py-20">
           <div className="text-center">
             <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-emerald-50 text-emerald-600">
@@ -573,7 +574,7 @@ export default function PublicBooking() {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur sm:px-6">
+      {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur sm:px-6">
         <div className="mx-auto flex max-w-6xl items-center justify-between">
           <Logo />
           <div className="flex items-center gap-2">
@@ -596,7 +597,7 @@ export default function PublicBooking() {
             </button>
           </div>
         </div>
-      </header>
+      </header>}
 
       <div className="border-b border-slate-200/80 bg-white px-4 py-5 sm:px-6">
         <Progress stage={stage} language={language} />
@@ -797,9 +798,9 @@ export default function PublicBooking() {
           </div>
         </div>
       </main>
-      <footer className="mt-8 border-t border-slate-200 bg-white px-5 py-6 text-center text-xs text-slate-500">
+      {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-5 py-6 text-center text-xs text-slate-500">
         © {new Date().getFullYear()} Easy Driving School · Secure booking powered by Cloudflare
-      </footer>
+      </footer>}
     </div>
   );
 }

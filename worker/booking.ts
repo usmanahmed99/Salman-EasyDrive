@@ -6,6 +6,7 @@ import { addMinutes, HttpError, randomToken, sha256, uuid } from "./utils";
 
 interface TemplateFields {
   service: string;
+  serviceDescription: string;
   center: string;
   reference: string;
   student: string;
@@ -187,7 +188,8 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
 
 export async function syncBookingCalendar(env: Env, bookingId: string, knownPublicToken?: string) {
   const booking = await env.DB.prepare(`
-    SELECT bookings.*, centers.name AS center_name, services.name_en, services.name_fr, services.price_display,
+    SELECT bookings.*, centers.name AS center_name, services.name_en, services.name_fr,
+      services.description_en, services.description_fr, services.price_display,
       booking_form_responses.response_json, booking_form_responses.student_name,
       booking_form_responses.student_email
     FROM bookings
@@ -219,17 +221,23 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     : "";
 
   const template = await env.DB.prepare(
-    "SELECT title_template, description_template FROM calendar_event_settings WHERE id = 'default'"
-  ).first<{ title_template: string | null; description_template: string | null }>();
+    "SELECT title_template, description_template, description_template_fr FROM calendar_event_settings WHERE id = 'default'"
+  ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null }>();
+
+  const isFr = booking.language === "fr";
+  const visibleAnswersFr = form.fields
+    .filter((field) => field.calendarVisible && answers[field.key])
+    .map((field) => `${field.label.fr || field.label.en}: ${String(answers[field.key])}`);
 
   const fields: TemplateFields = {
-    service: booking.name_en,
+    service: isFr ? (booking.name_fr || booking.name_en) : booking.name_en,
+    serviceDescription: isFr ? (booking.description_fr || booking.description_en || "") : (booking.description_en || ""),
     center: booking.center_name,
     reference: booking.reference,
     student: booking.student_name || "Private",
     price: booking.price_display || "",
     manageUrl,
-    visibleFields: visibleAnswers.join("\n")
+    visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n")
   };
 
   // Defaults are intentionally good on their own; templates only override when set.
@@ -243,11 +251,15 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     manageUrl ? `Manage or cancel: ${manageUrl}` : ""
   ].filter(Boolean).join("\n");
 
+  const activeDescriptionTemplate = isFr
+    ? (template?.description_template_fr || template?.description_template)
+    : template?.description_template;
+
   const summary = template?.title_template
     ? renderTemplate(template.title_template, fields)
     : defaultSummary;
-  const description = template?.description_template
-    ? renderTemplate(template.description_template, fields)
+  const description = activeDescriptionTemplate
+    ? renderTemplate(activeDescriptionTemplate, fields)
     : defaultDescription;
 
   const canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {

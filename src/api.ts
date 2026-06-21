@@ -204,7 +204,7 @@ export const adminApi = {
     request("/api/admin/calendar/mappings", { method: "POST", body: JSON.stringify(payload) }),
   deleteMapping: (id: string) => request(`/api/admin/calendar/mappings/${id}`, { method: "DELETE" }),
   calendarTemplate: () => request<{ template: CalendarEventTemplate }>("/api/admin/calendar/template"),
-  saveCalendarTemplate: (payload: { titleTemplate: string | null; descriptionTemplate: string | null }) =>
+  saveCalendarTemplate: (payload: { titleTemplate: string | null; descriptionTemplate: string | null; descriptionTemplateFr: string | null }) =>
     request<{ template: CalendarEventTemplate }>("/api/admin/calendar/template", { method: "PATCH", body: JSON.stringify(payload) }),
 
   // Retention

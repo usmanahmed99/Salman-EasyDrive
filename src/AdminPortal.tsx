@@ -1418,6 +1418,9 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showAddDialog, setShowAddDialog] = useState(false);
+  const [newFormName, setNewFormName] = useState("");
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => { if (!selectedId && forms[0]) setSelectedId(forms[0].id); }, [forms, selectedId]);
 
@@ -1457,6 +1460,25 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
       }]
     } : current);
 
+  const createForm = async () => {
+    const trimmed = newFormName.trim();
+    if (!trimmed) return;
+    setCreating(true);
+    try {
+      const emptySchema: BookingForm = { id: `form_${crypto.randomUUID().slice(0, 8)}`, name: trimmed, version: 1, fields: [] };
+      const result = await adminApi.createForm({ name: trimmed, schema: emptySchema });
+      await reload();
+      setSelectedId(result.id);
+      setShowAddDialog(false);
+      setNewFormName("");
+      toast.show("success", `Form "${trimmed}" created.`);
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const publish = async () => {
     if (!schema) return;
     setSaving(true);
@@ -1474,13 +1496,38 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   return (
     <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
       <div className="card h-fit p-4">
-        <p className="px-2 text-xs font-bold uppercase tracking-wider text-slate-400">Forms</p>
+        <div className="flex items-center justify-between px-2">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Forms</p>
+          <button className="grid h-6 w-6 place-items-center rounded-md text-slate-400 hover:bg-brand-50 hover:text-brand-600" title="Add form" onClick={() => { setNewFormName(""); setShowAddDialog(true); }}><Plus size={14} /></button>
+        </div>
         {forms.map((form) => (
           <button className={clsx("mt-2 flex w-full items-center gap-3 rounded-xl p-3 text-left text-sm font-bold", form.id === selectedId ? "bg-brand-50 text-brand-700" : "text-slate-600 hover:bg-slate-50")} key={form.id} onClick={() => setSelectedId(form.id)}>
             <FileText size={17} /> <span className="flex-1 truncate">{form.name}</span> <span className="text-[10px] text-slate-400">v{form.active_version}</span>
           </button>
         ))}
       </div>
+      {showAddDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={(e) => { if (e.target === e.currentTarget) setShowAddDialog(false); }}>
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <h2 className="mb-4 text-base font-extrabold text-ink">New form</h2>
+            <label className="block text-xs font-bold uppercase tracking-wider text-slate-400 mb-1">Form name</label>
+            <input
+              className="field w-full"
+              placeholder="e.g. Motorcycle lesson"
+              value={newFormName}
+              onChange={(e) => setNewFormName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") createForm(); if (e.key === "Escape") setShowAddDialog(false); }}
+              autoFocus
+            />
+            <div className="mt-5 flex justify-end gap-3">
+              <button className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50" onClick={() => setShowAddDialog(false)}>Cancel</button>
+              <button className="primary-button px-4 py-2 text-sm" disabled={!newFormName.trim() || creating} onClick={createForm}>
+                {creating && <LoaderCircle className="mr-1 inline animate-spin" size={14} />} Create
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="card overflow-hidden">
         <div className="flex items-center justify-between border-b border-slate-100 p-5">
           <div className="min-w-0 flex-1">
@@ -1549,6 +1596,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
 
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
+  const [descriptionTemplateFr, setDescriptionTemplateFr] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
 
   useEffect(() => {
@@ -1556,6 +1604,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
       .then((result) => {
         setTitleTemplate(result.template.title_template || "");
         setDescriptionTemplate(result.template.description_template || "");
+        setDescriptionTemplateFr(result.template.description_template_fr || "");
       })
       .catch(() => undefined);
     if (connection) {
@@ -1570,7 +1619,8 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
     try {
       await adminApi.saveCalendarTemplate({
         titleTemplate: titleTemplate.trim() || null,
-        descriptionTemplate: descriptionTemplate.trim() || null
+        descriptionTemplate: descriptionTemplate.trim() || null,
+        descriptionTemplateFr: descriptionTemplateFr.trim() || null
       });
       toast.show("success", "Calendar event template saved.");
     } catch (err) {
@@ -1692,7 +1742,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
             <p className="mt-1 text-xs text-slate-500">
               Customize the title and description of created calendar events (and the student's invite email).
               Leave a field blank to use the built-in default. Placeholders:
-              <span className="font-mono"> {"{service} {center} {reference} {student} {price} {manageUrl} {visibleFields}"}</span>
+              <span className="font-mono"> {"{service} {serviceDescription} {center} {reference} {student} {price} {manageUrl} {visibleFields}"}</span>
             </p>
           </div>
           <div className="space-y-4 p-5">
@@ -1706,12 +1756,21 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
               />
             </label>
             <label className="block">
-              <span className="label">Description template</span>
+              <span className="label">Description template (EN)</span>
               <textarea
                 className="field min-h-32 font-mono text-xs"
                 value={descriptionTemplate}
                 onChange={(event) => setDescriptionTemplate(event.target.value)}
                 placeholder={"Booking reference: {reference}\nStudent: {student}\nService: {service}\nCenter: {center}\n{visibleFields}\nManage or cancel: {manageUrl}"}
+              />
+            </label>
+            <label className="block">
+              <span className="label">Description template (FR)</span>
+              <textarea
+                className="field min-h-32 font-mono text-xs"
+                value={descriptionTemplateFr}
+                onChange={(event) => setDescriptionTemplateFr(event.target.value)}
+                placeholder={"Référence de réservation : {reference}\nÉtudiant : {student}\nService : {service}\nCentre : {center}\n{visibleFields}\nGérer ou annuler : {manageUrl}"}
               />
             </label>
             <div className="flex justify-end">

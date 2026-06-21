@@ -50,7 +50,8 @@ export function cookie(name: string, value: string, options: {
 // localhost/127.0.0.1 origin in that case so the dev portal works regardless of port.
 // This is inert in production, where GOOGLE_CLIENT_ID is set.
 function isOriginAllowed(origin: string, env: Env) {
-  if ([env.PUBLIC_SITE_ORIGIN, env.APP_BASE_URL].filter(Boolean).includes(origin)) return true;
+  const allowed = [env.APP_BASE_URL, ...(env.PUBLIC_SITE_ORIGIN || "").split(",").map((s) => s.trim())].filter(Boolean);
+  if (allowed.includes(origin)) return true;
   if (!env.GOOGLE_CLIENT_ID && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
   return false;
 }

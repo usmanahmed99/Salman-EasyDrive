@@ -128,6 +128,7 @@ export interface CalendarMapping {
 export interface CalendarEventTemplate {
   title_template: string | null;
   description_template: string | null;
+  description_template_fr: string | null;
   updated_at?: string;
 }
 

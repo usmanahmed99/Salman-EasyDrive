@@ -504,22 +504,23 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (path === "/api/admin/calendar/template") {
       if (method === "GET") {
         const setting = await env.DB.prepare(
-          "SELECT title_template, description_template, updated_at FROM calendar_event_settings WHERE id='default'"
-        ).first<{ title_template: string | null; description_template: string | null; updated_at: string }>();
-        return json({ template: setting || { title_template: null, description_template: null } });
+          "SELECT title_template, description_template, description_template_fr, updated_at FROM calendar_event_settings WHERE id='default'"
+        ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; updated_at: string }>();
+        return json({ template: setting || { title_template: null, description_template: null, description_template_fr: null } });
       }
       if (method === "PATCH") {
-        const body = await readJson(request) as { titleTemplate?: string | null; descriptionTemplate?: string | null };
+        const body = await readJson(request) as { titleTemplate?: string | null; descriptionTemplate?: string | null; descriptionTemplateFr?: string | null };
         // Empty string clears the override back to the built-in default.
         const title = body.titleTemplate?.trim() ? body.titleTemplate : null;
         const description = body.descriptionTemplate?.trim() ? body.descriptionTemplate : null;
+        const descriptionFr = body.descriptionTemplateFr?.trim() ? body.descriptionTemplateFr : null;
         await env.DB.prepare(`
           UPDATE calendar_event_settings
-          SET title_template=?, description_template=?, updated_by=?, updated_at=CURRENT_TIMESTAMP
+          SET title_template=?, description_template=?, description_template_fr=?, updated_by=?, updated_at=CURRENT_TIMESTAMP
           WHERE id='default'
-        `).bind(title, description, user.id).run();
-        await audit(env, user.id, "update", "calendar_event_settings", "default", { title, description }, request);
-        return json({ template: { title_template: title, description_template: description } });
+        `).bind(title, description, descriptionFr, user.id).run();
+        await audit(env, user.id, "update", "calendar_event_settings", "default", { title, description, descriptionFr }, request);
+        return json({ template: { title_template: title, description_template: description, description_template_fr: descriptionFr } });
       }
     }
     if (path === "/api/admin/calendar/mappings" && method === "GET") {
