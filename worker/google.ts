@@ -163,6 +163,32 @@ export async function deleteCalendar(env: Env, calendarId: string): Promise<void
   console.error("[google] deleteCalendar failed", response.status, await response.text());
 }
 
+/**
+ * Look up a single calendar event by id. Used by the reconcile job to detect events
+ * that were deleted directly in Google Calendar. Returns `exists: false` only when
+ * Google is certain the event is gone (404/410) or reports it as cancelled; on auth
+ * or transient errors it throws so the caller can skip rather than wrongly act.
+ */
+export async function getCalendarEvent(
+  env: Env,
+  calendarId: string,
+  eventId: string
+): Promise<{ exists: boolean; cancelled: boolean }> {
+  const token = await accessToken(env);
+  if (!token) throw new HttpError(503, "Google Calendar is not connected.", "google_not_connected");
+  const response = await fetch(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  if (response.status === 404 || response.status === 410) return { exists: false, cancelled: false };
+  if (!response.ok) {
+    console.error("[google] getCalendarEvent failed", response.status, await response.text());
+    throw new Error(`Calendar event lookup failed (${response.status})`);
+  }
+  const body = await response.json() as { status?: string };
+  return { exists: body.status !== "cancelled", cancelled: body.status === "cancelled" };
+}
+
 export async function deleteCalendarEvent(
   env: Env,
   calendarId: string,

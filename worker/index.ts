@@ -4,6 +4,7 @@ import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmBooking, serviceResponse, syncBookingCalendar, type ConfirmBookingPayload } from "./booking";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
+import { reconcileCalendar } from "./reconcile";
 import type { DbCenter, DbService, Env } from "./types";
 import {
   assertTrustedOrigin,
@@ -360,13 +361,24 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/public/services" && method === "GET") {
     const centerSlug = url.searchParams.get("centerSlug");
     if (!centerSlug) throw new HttpError(400, "centerSlug is required.");
-    // A service is offered at a center only when an enabled service_centers row links them.
+    // A service is offered at a center when an enabled service_centers row links
+    // them, OR when the service has no service_centers rows at all (= available
+    // everywhere). Checking every center in the admin UI deletes all rows, so the
+    // "no rows" case must resolve to available, not hidden.
     const results = await env.DB.prepare(`
       SELECT services.* FROM services
       JOIN centers ON centers.slug=? AND centers.enabled=1
-      JOIN service_centers ON service_centers.service_id=services.id
-        AND service_centers.center_id=centers.id AND service_centers.enabled=1
       WHERE services.enabled=1 AND services.deleted_at IS NULL
+        AND (
+          EXISTS (
+            SELECT 1 FROM service_centers
+            WHERE service_centers.service_id=services.id
+              AND service_centers.center_id=centers.id AND service_centers.enabled=1
+          )
+          OR NOT EXISTS (
+            SELECT 1 FROM service_centers WHERE service_centers.service_id=services.id
+          )
+        )
       ORDER BY services.name_en
     `).bind(centerSlug).all<DbService>();
     return json(results.results.map(serviceResponse));
@@ -447,6 +459,7 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (path === "/api/admin/bookings" && method === "GET") {
       const results = await env.DB.prepare(`
         SELECT bookings.id, bookings.reference, bookings.start_at, bookings.created_at, bookings.status,
+          bookings.calendar_last_error,
           services.name_en AS service, centers.name AS center,
           COALESCE(booking_form_responses.student_name, 'Private') AS student
         FROM bookings JOIN services ON services.id=bookings.service_id
@@ -576,6 +589,13 @@ async function route(request: Request, env: Env): Promise<Response> {
       });
       await audit(env, user.id, "cancel", "booking", adminCancelMatch[1], {}, request);
       return json({ id: adminCancelMatch[1], status: "cancelled_by_admin", calendarCleanup: cleanup });
+    }
+
+    if (path === "/api/admin/bookings/reconcile" && method === "POST") {
+      // Manual trigger: ignore working-hours gating by checking all centers right now.
+      const summary = await reconcileCalendar(env, { force: true });
+      await audit(env, user.id, "reconcile", "booking", "all", summary, request);
+      return json(summary);
     }
 
     if (path.startsWith("/api/admin/resource-groups")) {
@@ -793,6 +813,13 @@ export default {
     }
   },
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
-    ctx.waitUntil(cleanupRetention(env));
+    // Cron fires every 30 min for calendar reconciliation; reconcile gates itself to
+    // centers within working hours and is cheap when everyone is closed.
+    ctx.waitUntil(reconcileCalendar(env).catch((error) => console.error("[reconcile] failed", error)));
+    // Retention is a once-a-day job: only run it on the early-morning tick.
+    const now = new Date();
+    if (now.getUTCHours() === 5 && now.getUTCMinutes() < 30) {
+      ctx.waitUntil(cleanupRetention(env));
+    }
   }
 };

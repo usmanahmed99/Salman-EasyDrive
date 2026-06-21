@@ -21,12 +21,22 @@ export async function loadAvailabilityContext(
   ).bind(centerSlug).first<DbCenter>();
   if (!center) throw new HttpError(404, "Location is unavailable.", "center_not_found");
 
-  // A service is offered at a center only when an enabled service_centers row links them.
+  // A service is offered at a center when an enabled service_centers row links
+  // them, OR when the service has no service_centers rows at all (= available
+  // everywhere). Checking every center in the admin UI deletes all rows.
   const service = await env.DB.prepare(`
     SELECT services.* FROM services
-    JOIN service_centers ON service_centers.service_id = services.id
-    WHERE services.slug = ? AND service_centers.center_id = ?
-      AND services.enabled = 1 AND service_centers.enabled = 1 AND services.deleted_at IS NULL
+    WHERE services.slug = ? AND services.enabled = 1 AND services.deleted_at IS NULL
+      AND (
+        EXISTS (
+          SELECT 1 FROM service_centers
+          WHERE service_centers.service_id = services.id
+            AND service_centers.center_id = ? AND service_centers.enabled = 1
+        )
+        OR NOT EXISTS (
+          SELECT 1 FROM service_centers WHERE service_centers.service_id = services.id
+        )
+      )
   `).bind(serviceSlug, center.id).first<DbService>();
   if (!service) throw new HttpError(404, "Service is unavailable at this location.", "service_not_found");
 

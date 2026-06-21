@@ -214,5 +214,6 @@ export const adminApi = {
 
   // Bookings actions
   resyncBooking: (id: string) => request(`/api/admin/bookings/${id}/resync-calendar`, { method: "POST" }),
-  cancelBooking: (id: string) => request(`/api/admin/bookings/${id}/cancel`, { method: "POST" })
+  cancelBooking: (id: string) => request(`/api/admin/bookings/${id}/cancel`, { method: "POST" }),
+  reconcileBookings: () => request<{ checked: number; cleaned: number; skipped: number }>("/api/admin/bookings/reconcile", { method: "POST" })
 };

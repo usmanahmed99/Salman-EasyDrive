@@ -72,6 +72,7 @@ interface AdminBooking {
   service: string;
   center: string;
   status: string;
+  calendarLastError?: string;
 }
 
 const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
@@ -619,13 +620,19 @@ function formatDayLabel(day: string) {
 /* Bookings                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooking[]; onResync: (id: string) => Promise<void>; onCancel: (id: string) => Promise<void> }) {
+function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { bookings: AdminBooking[]; onResync: (id: string) => Promise<void>; onCancel: (id: string) => Promise<void>; onReconcile: () => Promise<void> }) {
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [centerFilter, setCenterFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [reconciling, setReconciling] = useState(false);
+
+  const reconcile = async () => {
+    setReconciling(true);
+    try { await onReconcile(); } finally { setReconciling(false); }
+  };
 
   const centers = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
   const statuses = useMemo(() => Array.from(new Set(bookings.map((b) => b.status))).sort(), [bookings]);
@@ -650,9 +657,14 @@ function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooki
   return (
     <div className="card overflow-hidden">
       <div className="flex flex-col gap-3 border-b border-slate-100 p-5">
-        <div className="relative w-full max-w-md">
-          <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-          <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <div className="flex items-center gap-3">
+          <div className="relative w-full max-w-md">
+            <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+            <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
+          </div>
+          <button className="secondary-button ml-auto min-h-10 shrink-0 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
+            {reconciling ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Reconcile calendar
+          </button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <select className="field h-10 w-auto min-w-[140px] py-0 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
@@ -696,7 +708,12 @@ function BookingsScreen({ bookings, onResync, onCancel }: { bookings: AdminBooki
                 <td className="px-5 py-4 text-slate-600">{booking.center}</td>
                 <td className="px-5 py-4 font-mono text-xs text-slate-500">{booking.reference}</td>
                 <td className="px-5 py-4 text-xs text-slate-400">{booking.booked_at}</td>
-                <td className="px-5 py-4"><StatusBadge status={booking.status} /></td>
+                <td className="px-5 py-4">
+                  <StatusBadge status={booking.status} />
+                  {booking.calendarLastError === "event_deleted_externally" && (
+                    <span className="mt-1 block text-[10px] font-semibold text-amber-600" title="The Google Calendar event was deleted directly; this booking was auto-cancelled and the slot freed.">⚠ Calendar deleted externally</span>
+                  )}
+                </td>
                 <td className="px-5 py-4">
                   <div className="flex items-center justify-end gap-1.5">
                     {booking.status === "calendar_sync_failed" && (
@@ -2131,7 +2148,8 @@ export default function AdminPortal() {
     service: booking.service,
     center: booking.center,
     status: booking.status,
-    start_at: booking.start_at
+    start_at: booking.start_at,
+    calendarLastError: booking.calendar_last_error || undefined
   } as AdminBooking));
 
   const loadAll = useCallback(async () => {
@@ -2213,6 +2231,19 @@ export default function AdminPortal() {
     }
   }, [toast]);
 
+  const onReconcile = useCallback(async () => {
+    try {
+      const summary = await adminApi.reconcileBookings();
+      toast.show("success", summary.cleaned
+        ? `Reconciled: ${summary.cleaned} booking(s) freed (event deleted in Google).`
+        : `Reconciled ${summary.checked} booking(s); all in sync.`);
+      const b = await adminApi.bookings();
+      setBookings(mapBookings(b.bookings));
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    }
+  }, [toast]);
+
   const doDevLogin = async () => {
     const result = await adminApi.devLogin();
     setUser(result.user);
@@ -2237,7 +2268,7 @@ export default function AdminPortal() {
     if (section === "docs") return <AdminDocs />;
     if (dataLoading) return <ScreenSkeleton />;
     if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} openSection={openSection} />;
-    if (section === "bookings") return <BookingsScreen bookings={bookings} onResync={onResync} onCancel={onCancel} />;
+    if (section === "bookings") return <BookingsScreen bookings={bookings} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} />;
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={loadAll} toast={toast} />;
     if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} centers={centers} reload={loadAll} toast={toast} />;

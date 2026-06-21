@@ -21,7 +21,9 @@ tag = "v1"
 new_sqlite_classes = ["BookingLock"]
 
 [triggers]
-crons = ["17 5 * * *"]
+# Every 30 min: calendar reconciliation (self-gated to centers within working hours).
+# Retention cleanup is gated in code to run once daily on the ~05:00 UTC tick.
+crons = ["*/30 * * * *"]
 
 [vars]
 APP_BASE_URL = "https://easydriving.nextiadriveops.com"
