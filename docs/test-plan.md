@@ -71,6 +71,8 @@ retention cutoff + PII anonymization. **Re-run CI-02 after any backend change.**
 | PUB-14 | On the manage page, click **Cancel this booking** → confirm | Booking cancelled (`cancelled_by_student`); slot freed; Google events removed; success state shown | P0 |
 | PUB-15 | Open `/booking/{ref}` with a wrong/missing `token` | Friendly "invalid or expired" message; no booking data leaked | P0 |
 | PUB-16 | Try to cancel inside the service's cancellation cutoff window | Blocked with "call us" message (`cancellation_cutoff`); booking unchanged | P1 |
+| PUB-17 | Open `/?embed=1` (and `?embed=1&center=laval`) | Header/footer hidden (chromeless); flow works; preselect honoured. See admin-guide "Embedding the booking page". | P1 |
+| PUB-18 | Load `/?embed=1` inside an `<iframe>` on a different-origin test page; complete a booking | Booking completes; confirmation shows (API is same-origin to the iframe, so no CORS issue) | P2 |
 
 ### 2.1 Capacity & conflict rules (the core engine, exercised through the UI)
 
@@ -113,9 +115,11 @@ Set these up by creating bookings via the public flow (or the admin), then re-ch
 | ID | Steps | Expected | Pri |
 |----|-------|----------|-----|
 | DASH-01 | Open Today | Stat cards show **live** counts: bookings today, car capacity (7 from seed), instructors active (4), calendar issues | P0 |
-| DASH-02 | Inspect "Recent bookings" | Real bookings (not demo); status badges correct | P0 |
+| DASH-02 | Inspect the day's bookings list | Real bookings (not demo); shows instructor name (or `—`); status badges correct; day arrows + Today work | P0 |
+| DASH-02b | Day with > 8 bookings | List paginates 8/page with "1–N of M" footer and prev/next; day change resets to page 1 | P1 |
 | DASH-03 | Inspect "Center status" | All 3 seeded centers listed with open/closed state | P1 |
 | DASH-04 | If a `calendar_sync_failed` booking exists, click "Retry …" | Calls resync; success toast or clean error (no canonical mapping → readable message) | P0 |
+| DASH-04b | Click "Reconcile calendar" | Success toast summarising the run; no crash (full check in BKG-08) | P1 |
 
 ### 4.1 Emergency Control
 
@@ -155,6 +159,7 @@ Set these up by creating bookings via the public flow (or the admin), then re-ch
 | SVC-05 | Disable a service, Save | `enabled=0`; not offered in public `/api/public/services` | P0 |
 | SVC-06 | Edit a service and shorten duration so it now fits more slots | Public availability reflects new duration | P1 |
 | SVC-07 | Save with empty English name | Rejected "name and slug are required" | P1 |
+| SVC-08 | Drag to reorder services | Order persists and drives the public `/api/public/services` order | P1 |
 
 ---
 
@@ -231,10 +236,14 @@ Set these up by creating bookings via the public flow (or the admin), then re-ch
 
 | ID | Steps | Expected | Pri |
 |----|-------|----------|-----|
-| BKG-01 | Open Bookings | Real bookings; search filters by name/reference/service/center | P0 |
-| BKG-02 | Cancel a confirmed booking | Status → `cancelled_by_admin`; capacity freed; the booking's Google events deleted (student emailed a cancellation); see CAL-14 | P0 |
+| BKG-01 | Open Bookings | Real bookings; search filters by name/reference/service/center/instructor; Instructor column shown | P0 |
+| BKG-02 | Cancel a confirmed booking | Status → `cancelled_by_admin`; capacity freed; the booking's Google events deleted (student emailed a cancellation); admin cancel ignores the cancellation cutoff; see CAL-14 | P0 |
 | BKG-03 | Retry a `calendar_sync_failed` booking | Resync action runs; status updates or readable error | P0 |
 | BKG-04 | Search a non-existent term | "No bookings found" empty state | P2 |
+| BKG-05 | Filter by service, then by instructor; Clear | Subset matches; pooled/no-instructor rows show `—` and are excluded by instructor filter; Clear resets all | P1 |
+| BKG-06 | Reschedule a booking via the picker | Same reference, new time; calendar event moved; resource-conflict slots are disabled in the picker | P0 |
+| BKG-07 | New booking on an amber (cutoff/hours) slot | Created via admin override; a true resource-conflict slot is refused | P1 |
+| BKG-08 | Delete a canonical Google event, click Reconcile | Booking → cancelled (`event_deleted_externally`), slot freed; no-op run reports all in sync | P1 |
 
 ---
 

@@ -32,11 +32,19 @@ npx wrangler d1 execute easy-driving-booking --local --command "UPDATE bookings 
    - Instructors active = **4**, "4 total"
    - Calendar issues = count of `calendar_sync_failed` (≥ 1 after setup)
 
-## DASH-02 — Recent bookings list — **P0**
+## DASH-02 — Day bookings list — **P0**
 
-1. Look at "Recent bookings".
-2. **Expected:** The real booking(s) appear with correct service/center; the sync-failed one
-   shows a **"Sync issue"** badge.
+1. Look at the "<day>'s bookings" card.
+2. **Expected:** The real booking(s) appear with correct service/center and the assigned **instructor** name (or `—` for pooled/no-instructor services); the sync-failed one shows a **"Sync issue"** badge.
+3. Use the day arrows to step to a day with no bookings and back; click **Today** to return.
+4. **Expected:** The list reflects the selected day; **Today** is disabled when already on today.
+
+## DASH-02b — Pagination — **P1**
+
+1. Seed > 8 active bookings on the same day (loop the `/book` flow or insert rows).
+2. **Expected:** The day list shows 8 rows with a footer like "1–8 of N" and prev/next page controls.
+3. Page to the next page and back.
+4. **Expected:** Rows change; changing the day resets to page 1.
 
 ## DASH-03 — Center status
 
@@ -54,6 +62,11 @@ npx wrangler d1 execute easy-driving-booking --local --command "UPDATE bookings 
    ```bash
    npx wrangler d1 execute easy-driving-booking --local --command "SELECT reference, status FROM bookings;"
    ```
+
+## DASH-04b — Reconcile calendar button — **P1**
+
+1. Click **Reconcile calendar** in the bookings card header.
+2. **Expected:** A success toast summarises the run (e.g. "Reconciled N booking(s); all in sync"); the app does not crash. Full behaviour is covered in [11-bookings-actions.md](11-bookings-actions.md) BKG-08.
 
 ---
 
@@ -113,4 +126,4 @@ npx wrangler d1 execute easy-driving-booking --local --command "DELETE FROM capa
 
 ## Pass criteria
 
-DASH-01, 02, 04, EMG-01, 02, 05, 06 (P0) pass. DASH-03, EMG-03, 04 (P1) pass.
+DASH-01, 02, 04, EMG-01, 02, 05, 06 (P0) pass. DASH-02b, 03, 04b, EMG-03, 04 (P1) pass.

@@ -11,9 +11,13 @@ It shows:
 - Total bookings for today and how many are confirmed
 - Cars currently in use and active instructors
 - Google Calendar synchronization warnings
-- The full list of today's bookings with time, service, center, and student name
+- The list of the selected day's bookings with time, service, center, student name, and assigned instructor
 - Center open/closed status
 - Any active emergency controls
+
+Use the day arrows to step forward or back through other days, and **Today** to jump back. When a day has many bookings the list is **paginated** (8 per page) with page controls at the bottom, so a busy day stays readable. Click **All bookings** to open the full Bookings screen with search and filters.
+
+The **Reconcile calendar** button (top of the bookings card, also available on the Bookings screen) manually checks Google Calendar for events that were deleted directly in Google and frees those slots in the app — see [Reconcile calendar](#reconcile-calendar).
 
 ### Recommended morning check
 
@@ -112,7 +116,14 @@ Open **Bookings** to review, search, and manage all scheduled appointments.
 
 ### Searching and filtering
 
-Use the search bar to find a booking by student name or booking reference (e.g. ED-251002). Filter by center, service, date range, or status to narrow results.
+Use the search bar to find a booking by student name, booking reference (e.g. ED-251002), service, center, or **instructor** name. Narrow results with the dropdown filters — **status**, **center**, **service**, and **instructor** — plus a **date range**. Filters combine (all must match); click **Clear** to reset them all at once.
+
+The bookings table includes an **Instructor** column. This shows the *named* instructor assigned to the booking. Two cases show a dash (`—`) instead of a name:
+
+- The service uses a **pooled** instructor group (no specific person is named per booking), so there is no individual to display.
+- The service requires **no instructor** (e.g. car rental only).
+
+Because the instructor filter and column rely on named allocations, filtering by instructor will not surface bookings handled by a pooled group.
 
 ### Booking statuses
 
@@ -131,10 +142,11 @@ Use the search bar to find a booking by student name or booking reference (e.g. 
 
 1. Find the booking using search or filters.
 2. Confirm the booking reference and student.
-3. Check whether the cancellation cutoff has passed — online cancellation by students is blocked after the cutoff.
-4. Click **Cancel** and record the reason.
-5. Confirm the slot becomes available again on the public booking page.
-6. The student's Google Calendar event is deleted automatically with a cancellation notification. Instructor blocking events are removed silently.
+3. Click **Cancel** and record the reason.
+4. Confirm the slot becomes available again on the public booking page.
+5. The student's Google Calendar event is deleted automatically with a cancellation notification. Instructor blocking events are removed silently.
+
+The **cancellation cutoff** only restricts the **student's** self-service link — once it passes, the student can no longer cancel online and is told to call the school. **Admin cancellation here is never blocked by the cutoff**; you can cancel at any time.
 
 The booking is always cancelled in the database even if a Google Calendar deletion fails.
 
@@ -147,13 +159,62 @@ The booking is always cancelled in the database even if a Google Calendar deleti
 5. Click **Retry sync**.
 6. Confirm one event appears on the canonical calendar and the student received one invite.
 
-### Reshedule a booking
+### Reconcile calendar
 
-The system does not have a one-click reschedule. To reschedule:
+The **Reconcile calendar** button (on both the Today dashboard and the Bookings screen) reconciles app bookings against Google Calendar on demand. It is the manual version of a job that otherwise runs automatically every 30 minutes.
 
-1. Cancel the original booking (student receives a cancellation email).
-2. Ask the student to rebook, or create a new booking on their behalf if a staff booking flow is available.
-3. Confirm the new booking appears on the calendar with the correct instructor and car allocation.
+What it does: for every future, still-active booking, it checks whether the canonical Google event still exists. If staff deleted the event **directly in Google Calendar**, the app treats that as a cancellation — it cancels the booking (status `cancelled_by_admin`, flagged *"Calendar deleted externally"*), frees the slot, and removes the instructor/car blocking events.
+
+Use it when someone deleted an event straight from Google and you want the freed slot to reflect in the app immediately rather than waiting for the next automatic run.
+
+**Scope and limits — what it does not do:**
+
+- It is **one-directional** (Google → app). It does not push app changes back to Google; that is what **Retry sync** does per booking.
+- It only reacts to **deleted** events. An event that was **moved or edited** in Google is not detected — the app keeps the original time. To change a time, use **Reschedule** in the app, not Google.
+- It does not create app bookings for events added directly in Google.
+- The manual button forces a check across **all centers right now**; the automatic 30-minute job only checks centers currently within their opening hours.
+
+### Create a booking on a student's behalf (ad-hoc admin booking)
+
+Use **New booking** (top of the Bookings screen) to book for a student over the phone or in person.
+
+1. Click **New booking**.
+2. Select the center and service. Enter the student's name (required) and optionally email and phone.
+3. Pick a time using the **availability picker** (see [The availability picker](#the-availability-picker) below).
+4. Click **Create booking**.
+
+**What admin booking overrides — and what it does not.** An admin booking is allowed to ignore:
+
+- the **booking cutoff** (you can book inside the lead-time window, or even for a past time);
+- **opening hours** and **temporary closures** (outside-hours, center-closed, service-closed);
+- **service capacity** limits (base concurrency / capacity overrides).
+
+It will **not** override a genuine resource conflict: if the specific instructor or car the service needs is already booked at that time, the booking is refused with *"The selected resource is already booked at this time."* This is deliberate — overrides give flexibility for exceptions, but never create a real double-booking. If you must free the resource, cancel or reschedule the conflicting booking first, or block/adjust resources via Emergency Control.
+
+The minimal admin form captures only name/email/phone — it does not collect the full public service form. The student still receives a Google Calendar invite if an email is provided.
+
+### Reschedule a booking
+
+Rescheduling is one click — it keeps the same booking (and reference), moves it to a new time, updates the resource allocations, and moves the Google Calendar event so the student's invite is updated automatically (no separate email is sent).
+
+1. Find the booking using search or filters.
+2. Click the **reschedule** (calendar) icon on its row.
+3. Pick the new time with the **availability picker**.
+4. Click **Reschedule**.
+
+The same override rules as admin booking apply: cutoffs, hours, and closures are bypassed, but the move is **blocked if the required instructor or car is already booked** at the new time.
+
+### The availability picker
+
+Both **New booking** and **Reschedule** show an inline picker so you can see what is actually open instead of guessing a time:
+
+- Choose a **day**; the grid shows that day's slots for the selected center/service.
+- **White** slots are fully available — click to select.
+- **Amber** slots are blocked only by an overridable rule (cutoff, hours, or a closure). They remain clickable because admins may override those — the booking will go through.
+- **Greyed / struck-through** slots have a real **resource conflict** (instructor or car taken) and are disabled — they cannot be booked even by an admin.
+- Use **Or enter an exact time** to type any time directly (useful when the day is closed and shows no grid, or for an off-grid time).
+
+A day that is fully closed shows no grid; use the exact-time field to override.
 
 ### Student self-service cancel link
 
@@ -187,6 +248,10 @@ Open the center and go to **Availability rules** → select the center → set t
 
 Each service defines what students can book, how long it takes, what it costs, which form they fill in, and which resources it requires.
 
+### Ordering services
+
+Drag a service by the grip handle (left of each row) to reorder the list. The order you set is saved immediately and is the **same order students see** when choosing a service on the public booking page — so put your most common or highest-priority services at the top. Newly added services appear at the end until you move them.
+
 ### Key service settings
 
 | Setting | What it controls |
@@ -194,9 +259,9 @@ Each service defines what students can book, how long it takes, what it costs, w
 | Duration | The length of the appointment shown to the student |
 | Buffer before / after | Extra operational time added around the slot — the instructor or car is blocked for this extra time |
 | Slot interval | How often a new slot starts (e.g. every 30 min) |
-| Booking cutoff | How far in advance a booking must be made (e.g. 2 hours before) |
-| Cancellation cutoff | How close to the appointment self-service cancellation is blocked |
-| Base concurrency | How many bookings of this service can run at exactly the same time |
+| Booking cutoff | How far in advance a *public* booking must be made (e.g. 2 hours before). Admin booking and reschedule override this. |
+| Cancellation cutoff | How close to the appointment *student* self-service cancellation is blocked. Admin cancellation is never blocked. |
+| Base concurrency | How many bookings of this service can run at exactly the same time. Admin booking can exceed this; a real resource conflict still cannot. |
 | Resource requirements | How many cars and instructors each booking of this service needs |
 
 ### Resource requirements
@@ -389,6 +454,125 @@ Center: {center}
 To manage or cancel your booking:
 {manageUrl}
 ```
+
+## Embedding the booking page on another website
+
+The public booking page can be linked to directly or embedded inside another site (for example `easydriving.ca`) using an `<iframe>`. The booking app is a normal web page on the booking domain, so embedding requires no special integration — you point an iframe at the booking URL with the right query parameters.
+
+Throughout this section, replace `easydriving.nextiadriveops.com` with your live booking domain if it differs.
+
+### How it works
+
+- The booking page lives at the **root** of the booking domain: `https://easydriving.nextiadriveops.com/`.
+- Its behaviour is controlled entirely by **URL query parameters** (below). The same URL works whether opened directly or loaded in an iframe.
+- All booking API calls are made **from the booking domain to itself**, so embedding on a different domain (like easydriving.ca) works without any cross-origin/CORS setup. The visitor's browser only talks to your site's iframe; the iframe talks to the booking backend.
+
+### URL parameters
+
+| Parameter | Effect | Example |
+|---|---|---|
+| `embed=1` | Hides the page header and footer for a clean, chromeless embed. Use this for iframes. | `?embed=1` |
+| `center=<slug>` | Pre-selects a center and skips the "choose location" step. The slug is the center's URL identifier (e.g. `laval`, `kirkland`, `henri-bourassa`). | `?center=laval` |
+| `service=<slug>` | Pre-selects a service and skips to the schedule step. **Requires `center` as well** (a service is chosen within a center). | `?center=laval&service=road-test-package` |
+| `lang=en` / `lang=fr` | Sets the initial language. Visitors can still switch unless the header is hidden by `embed=1`. | `?lang=fr` |
+
+Combine parameters with `&`, e.g. `?embed=1&center=laval&lang=fr`.
+
+> Find the exact slugs in **Centers** and **Services** in this portal (the slug is the locked URL identifier shown on each). Always test a new embed URL in a private/incognito window before publishing it.
+
+### Scenario 1 — Simple "Book now" link (no embed)
+
+The easiest option. Add a normal link/button on your website that opens the full booking page (with its own header/footer) in a new tab:
+
+```html
+<a href="https://easydriving.nextiadriveops.com/?lang=en" target="_blank" rel="noopener">
+  Book a lesson
+</a>
+```
+
+Use this when you don't want to manage iframe sizing. It always works on every device.
+
+### Scenario 2 — Full booking flow embedded in a page
+
+Embed the whole flow (starting from the choose-location step) inside one of your pages:
+
+```html
+<iframe
+  src="https://easydriving.nextiadriveops.com/?embed=1"
+  title="Book a driving lesson"
+  style="width:100%; min-height:900px; border:0;"
+  loading="lazy">
+</iframe>
+```
+
+`embed=1` removes the booking page's own header/footer so it blends into your site. Give it generous height (see [Sizing](#sizing-and-responsiveness)).
+
+### Scenario 3 — A specific center
+
+If a page on your site is about one location, skip the location step:
+
+```html
+<iframe
+  src="https://easydriving.nextiadriveops.com/?embed=1&center=laval"
+  title="Book at our Laval center"
+  style="width:100%; min-height:850px; border:0;">
+</iframe>
+```
+
+The visitor lands directly on the service step for Laval.
+
+### Scenario 4 — A specific service at a specific center
+
+For a landing page dedicated to one offer (e.g. the SAAQ road-test package at Laval), pass both `center` and `service` so the visitor lands on the calendar:
+
+```html
+<iframe
+  src="https://easydriving.nextiadriveops.com/?embed=1&center=laval&service=road-test-package"
+  title="Book the SAAQ road test package at Laval"
+  style="width:100%; min-height:800px; border:0;">
+</iframe>
+```
+
+If the service slug is wrong or the service isn't offered at that center, the flow falls back to the normal service-selection step rather than erroring — so double-check the slug.
+
+### Scenario 5 — French page
+
+Match the embed language to the page it sits on:
+
+```html
+<iframe
+  src="https://easydriving.nextiadriveops.com/?embed=1&center=laval&lang=fr"
+  title="Réservez une leçon de conduite"
+  style="width:100%; min-height:850px; border:0;">
+</iframe>
+```
+
+### Scenario 6 — Multiple "Book" buttons that open a popup
+
+Instead of an always-visible iframe, you can open the booking page in a modal/popup when a button is clicked. Any popup/lightbox plugin works — point it at the same URLs above (use `embed=1` for the cleanest look). On WordPress (which easydriving.ca uses), a popup block/plugin pointed at the booking URL is often tidier than an inline iframe.
+
+### Sizing and responsiveness
+
+The booking page is responsive and fills the width of its iframe, so always set `width:100%`. Height is the one thing to watch: the page does **not** auto-resize the parent iframe, so set a fixed `min-height` large enough for the tallest step (the details form). Guidelines:
+
+- Whole flow (`embed=1` only): `min-height: 900px`.
+- Pre-selected center: `min-height: 850px`.
+- Pre-selected service (starts on calendar): `min-height: 800px`.
+
+If you see an inner scrollbar on mobile, increase the height. Keep `border:0` and `width:100%` for a seamless look.
+
+### WordPress note (easydriving.ca)
+
+- In the block editor, use a **Custom HTML** block and paste one of the iframe snippets above.
+- Some themes/plugins strip `<iframe>` tags from the classic editor; if the embed disappears on save, use a Custom HTML block or an "iframe embed" plugin.
+- Page builders (Elementor, etc.) usually have an **HTML / Embed** widget — paste the same snippet there.
+
+### Testing an embed
+
+1. Build the URL with the parameters you want and open it directly in a private window first — confirm the right starting step, center/service, and language.
+2. Add the iframe to a draft page on your site and preview it.
+3. Complete one real test booking end-to-end from inside the embed; confirm the confirmation screen shows and the Google Calendar invite arrives.
+4. Check on a phone — adjust `min-height` if an inner scrollbar appears.
 
 ## Privacy and retention
 

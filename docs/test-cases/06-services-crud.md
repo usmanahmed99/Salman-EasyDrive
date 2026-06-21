@@ -85,6 +85,18 @@
 1. Add service, leave **Name (English)** blank, fill the rest, Save.
 2. **Expected:** Rejected — "Service name and slug are required" (Save disabled or server 400).
 
+## SVC-08 — Drag-and-drop ordering drives public order — **P1**
+
+1. In **Services**, drag a service by its grip handle to a new position; release.
+2. **Expected:** Order persists (reload the page — it stays).
+3. **Verify** the same order is served publicly:
+
+   ```bash
+   curl -s "http://localhost:8787/api/public/services?centerSlug=laval" | python -c "import sys,json;print([s['name']['en'] for s in json.load(sys.stdin)])"
+   ```
+
+4. **Expected:** The public list matches the admin order. Open `/book` → Laval and confirm the service cards appear in that order.
+
 ---
 
 ## Teardown
@@ -99,4 +111,4 @@ didn't restore in-step).
 
 ## Pass criteria
 
-SVC-01, 02, 05 (P0) pass. SVC-03, 04, 06, 07 (P1) pass.
+SVC-01, 02, 05 (P0) pass. SVC-03, 04, 06, 07, 08 (P1) pass.
