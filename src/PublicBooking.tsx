@@ -670,7 +670,9 @@ export default function PublicBooking() {
                             {item.priceDisplay && <span className="rounded-lg bg-ink px-3 py-1.5 text-sm font-extrabold text-white">{item.priceDisplay}</span>}
                           </div>
                           <h2 className="mt-4 text-lg font-extrabold text-ink">{localize(item.name, language)}</h2>
-                          <p className="mt-1 flex-1 text-sm leading-6 text-slate-500">{localize(item.description, language)}</p>
+                          <div className="flex-1">
+                            <DescriptionMarkdown text={localize(item.description, language)} />
+                          </div>
                           <div className="mt-4 flex items-center justify-between text-xs">
                             <span className="flex items-center gap-1.5 font-semibold text-slate-500">
                               <Clock3 size={14} /> {item.durationMinutes} min
