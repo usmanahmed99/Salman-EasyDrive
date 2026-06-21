@@ -667,18 +667,18 @@ function BookingsScreen({ bookings, onResync, onCancel, onReconcile }: { booking
           </button>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select className="field h-10 w-auto min-w-[140px] py-0 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+          <select className="field h-10 !w-40 py-0 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="all">All statuses</option>
             {statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
           </select>
-          <select className="field h-10 w-auto min-w-[140px] py-0 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
+          <select className="field h-10 !w-40 py-0 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
             <option value="all">All centers</option>
             {centers.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
           <div className="flex items-center gap-1.5 text-xs text-slate-500">
-            <input type="date" className="field h-10 w-[150px] py-0 text-sm" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+            <input type="date" className="field h-10 !w-[150px] py-0 text-sm" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <span>–</span>
-            <input type="date" className="field h-10 w-[150px] py-0 text-sm" aria-label="To date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <input type="date" className="field h-10 !w-[150px] py-0 text-sm" aria-label="To date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           {hasFilters && (
             <button className="flex h-10 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800" onClick={clearFilters}>
