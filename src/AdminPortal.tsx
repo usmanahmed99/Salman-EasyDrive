@@ -435,7 +435,7 @@ function EmergencyControl({
 /* -------------------------------------------------------------------------- */
 
 function TodayDashboard({
-  bookings, centers, services, resources, groups, overrides, setOverrides, onResync, openSection
+  bookings, centers, services, resources, groups, overrides, setOverrides, onResync, onReconcile, openSection
 }: {
   bookings: AdminBooking[];
   centers: Center[];
@@ -445,12 +445,19 @@ function TodayDashboard({
   overrides: Array<Record<string, string>>;
   setOverrides: React.Dispatch<React.SetStateAction<Array<Record<string, string>>>>;
   onResync: (id: string) => Promise<void>;
+  onReconcile: () => Promise<void>;
   openSection: (section: AdminSection) => void;
 }) {
   const [selectedDay, setSelectedDay] = useState(montrealToday());
+  const [reconciling, setReconciling] = useState(false);
   const isToday = selectedDay === montrealToday();
   const dayLabel = isToday ? "Today" : formatDayLabel(selectedDay);
   const shiftDay = (delta: number) => setSelectedDay((current) => addDays(current, delta));
+
+  const reconcile = async () => {
+    setReconciling(true);
+    try { await onReconcile(); } finally { setReconciling(false); }
+  };
 
   const byTime = (a: AdminBooking, b: AdminBooking) => a.start_at.localeCompare(b.start_at);
   const onDay = bookings.filter((booking) => montrealDate(booking.start_at) === selectedDay);
@@ -504,6 +511,9 @@ function TodayDashboard({
                 <button className={clsx("min-w-[88px] px-2 text-xs font-bold", isToday ? "text-slate-300" : "text-brand-600 hover:text-brand-700")} disabled={isToday} onClick={() => setSelectedDay(montrealToday())}>{isToday ? formatDayLabel(selectedDay) : "Today"}</button>
                 <button className="grid h-9 w-9 place-items-center rounded-r-xl text-slate-500 hover:bg-slate-50" title="Next day" onClick={() => shiftDay(1)}><ChevronRight size={16} /></button>
               </div>
+              <button className="secondary-button min-h-9 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
+                {reconciling ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Reconcile calendar
+              </button>
               <button className="secondary-button min-h-9 px-3 py-2 text-xs" onClick={() => openSection("bookings")}><ListFilter size={15} /> All bookings</button>
             </div>
           </div>
@@ -2603,7 +2613,7 @@ export default function AdminPortal() {
   const content = () => {
     if (section === "docs") return <AdminDocs />;
     if (dataLoading) return <ScreenSkeleton />;
-    if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} openSection={openSection} />;
+    if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} onReconcile={onReconcile} openSection={openSection} />;
     if (section === "bookings") return <BookingsScreen bookings={bookings} centers={centers} services={services} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} reload={loadAll} />;
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
