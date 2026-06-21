@@ -7,6 +7,8 @@ import {
   Check,
   Copy,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CircleGauge,
   Clock3,
   FileText,
@@ -419,14 +421,21 @@ function TodayDashboard({
   onResync: (id: string) => Promise<void>;
   openSection: (section: AdminSection) => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const todays = bookings.filter((booking) => booking.time && bookingDate(booking) === today);
+  const [selectedDay, setSelectedDay] = useState(montrealToday());
+  const isToday = selectedDay === montrealToday();
+  const dayLabel = isToday ? "Today" : formatDayLabel(selectedDay);
+  const shiftDay = (delta: number) => setSelectedDay((current) => addDays(current, delta));
+
+  const byTime = (a: AdminBooking, b: AdminBooking) => a.start_at.localeCompare(b.start_at);
+  const onDay = bookings.filter((booking) => montrealDate(booking.start_at) === selectedDay);
+  const active = onDay.filter((booking) => !booking.status.startsWith("cancelled")).sort(byTime);
+  const cancelled = onDay.filter((booking) => booking.status.startsWith("cancelled")).sort(byTime);
   const failed = bookings.filter((booking) => booking.status === "calendar_sync_failed");
   const activeInstructors = resources.filter((resource) => resource.type === "instructor" && resource.enabled).length;
   const totalCars = groups.filter((group) => group.type === "cars").reduce((sum, group) => sum + group.capacity, 0);
 
   const stats = [
-    { label: "Bookings today", value: String(todays.length), note: `${bookings.length} in window`, icon: CalendarDays, color: "text-brand-600 bg-brand-50" },
+    { label: isToday ? "Bookings today" : "Bookings", value: String(active.length), note: cancelled.length ? `${cancelled.length} cancelled` : dayLabel, icon: CalendarDays, color: "text-brand-600 bg-brand-50" },
     { label: "Car capacity", value: String(totalCars), note: `${groups.filter((g) => g.type === "cars").length} pools`, icon: CarFront, color: "text-amber-600 bg-amber-50" },
     { label: "Instructors active", value: String(activeInstructors), note: `${resources.filter((r) => r.type === "instructor").length} total`, icon: UsersRound, color: "text-emerald-600 bg-emerald-50" },
     { label: "Calendar issues", value: String(failed.length), note: failed.length ? "Needs attention" : "All synced", icon: AlertTriangle, color: "text-amber-600 bg-amber-50" }
@@ -458,16 +467,23 @@ function TodayDashboard({
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,0.7fr)]">
         <div className="card overflow-hidden">
-          <div className="flex items-center justify-between border-b border-slate-100 px-5 py-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
             <div>
-              <h2 className="font-extrabold text-ink">Recent bookings</h2>
-              <p className="mt-0.5 text-xs text-slate-500">{bookings.length} most recent</p>
+              <h2 className="font-extrabold text-ink">{dayLabel}'s bookings</h2>
+              <p className="mt-0.5 text-xs text-slate-500">{active.length} active{cancelled.length ? ` · ${cancelled.length} cancelled` : ""}</p>
             </div>
-            <button className="secondary-button min-h-9 px-3 py-2 text-xs" onClick={() => openSection("bookings")}><ListFilter size={15} /> All bookings</button>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center rounded-xl border border-slate-200 bg-white">
+                <button className="grid h-9 w-9 place-items-center rounded-l-xl text-slate-500 hover:bg-slate-50" title="Previous day" onClick={() => shiftDay(-1)}><ChevronLeft size={16} /></button>
+                <button className={clsx("min-w-[88px] px-2 text-xs font-bold", isToday ? "text-slate-300" : "text-brand-600 hover:text-brand-700")} disabled={isToday} onClick={() => setSelectedDay(montrealToday())}>{isToday ? formatDayLabel(selectedDay) : "Today"}</button>
+                <button className="grid h-9 w-9 place-items-center rounded-r-xl text-slate-500 hover:bg-slate-50" title="Next day" onClick={() => shiftDay(1)}><ChevronRight size={16} /></button>
+              </div>
+              <button className="secondary-button min-h-9 px-3 py-2 text-xs" onClick={() => openSection("bookings")}><ListFilter size={15} /> All bookings</button>
+            </div>
           </div>
           <div className="divide-y divide-slate-100">
-            {bookings.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-400">No bookings yet.</p>}
-            {bookings.slice(0, 6).map((booking) => (
+            {active.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-400">No active bookings on this day.</p>}
+            {active.map((booking) => (
               <div className="flex items-center gap-3 px-5 py-4 transition hover:bg-slate-50" key={booking.id}>
                 <div className="w-16 shrink-0">
                   <p className="text-sm font-extrabold text-ink">{booking.time}</p>
@@ -481,6 +497,28 @@ function TodayDashboard({
               </div>
             ))}
           </div>
+          {cancelled.length > 0 && (
+            <details className="border-t border-slate-100">
+              <summary className="cursor-pointer select-none px-5 py-3 text-xs font-bold uppercase tracking-wider text-slate-400 hover:bg-slate-50">
+                Cancelled ({cancelled.length})
+              </summary>
+              <div className="divide-y divide-slate-100">
+                {cancelled.map((booking) => (
+                  <div className="flex items-center gap-3 px-5 py-4 opacity-70" key={booking.id}>
+                    <div className="w-16 shrink-0">
+                      <p className="text-sm font-extrabold text-slate-400 line-through">{booking.time}</p>
+                      <p className="mt-0.5 text-[10px] font-bold text-slate-400">{booking.reference}</p>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-500">{booking.student}</p>
+                      <p className="truncate text-xs text-slate-400">{booking.service} · {booking.center}</p>
+                    </div>
+                    <StatusBadge status={booking.status} />
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
         <div className="space-y-6">
           <div className="card p-5">
@@ -490,13 +528,13 @@ function TodayDashboard({
             </div>
             <div className="mt-4 space-y-3">
               {centers.map((center) => {
-                const count = bookings.filter((booking) => booking.center === center.name && bookingDate(booking) === today).length;
+                const count = active.filter((booking) => booking.center === center.name).length;
                 return (
                   <div className="flex items-center gap-3" key={center.id}>
                     <span className={clsx("h-2.5 w-2.5 rounded-full ring-4", center.enabled ? "bg-emerald-500 ring-emerald-50" : "bg-slate-300 ring-slate-100")} />
                     <div className="flex-1">
                       <p className="text-sm font-bold text-ink">{center.name}</p>
-                      <p className="text-xs text-slate-500">{count} bookings today</p>
+                      <p className="text-xs text-slate-500">{count} booking{count === 1 ? "" : "s"} {isToday ? "today" : "this day"}</p>
                     </div>
                     <span className="text-xs font-semibold text-slate-400">{center.enabled ? "Open" : "Closed"}</span>
                   </div>
@@ -525,7 +563,33 @@ function TodayDashboard({
 }
 
 function bookingDate(booking: AdminBooking) {
-  return booking.start_at.slice(0, 10);
+  return montrealDate(booking.start_at);
+}
+
+/** Calendar date (YYYY-MM-DD) of an ISO timestamp in the America/Montreal timezone. */
+function montrealDate(iso: string) {
+  if (!iso) return "";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Montreal", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function montrealToday() {
+  return montrealDate(new Date().toISOString());
+}
+
+function addDays(day: string, delta: number) {
+  const date = new Date(day + "T12:00:00Z");
+  date.setUTCDate(date.getUTCDate() + delta);
+  return date.toISOString().slice(0, 10);
+}
+
+function formatDayLabel(day: string) {
+  return new Intl.DateTimeFormat("en-CA", {
+    weekday: "short", month: "short", day: "numeric", timeZone: "UTC"
+  }).format(new Date(day + "T12:00:00Z"));
 }
 
 /* -------------------------------------------------------------------------- */
@@ -702,7 +766,7 @@ function CenterModal({ center, onClose, onSaved }: { center: Center | null; onCl
 
 function CentersScreen({ centers, bookings, groups, resources, reload, toast }: { centers: Center[]; bookings: AdminBooking[]; groups: ResourceGroup[]; resources: AdminResource[]; reload: () => void; toast: ReturnType<typeof useToast> }) {
   const [editing, setEditing] = useState<Center | null | "new">(null);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = montrealToday();
   const { confirm, dialog } = useConfirm();
 
   const remove = async (center: Center) => {
@@ -2043,6 +2107,8 @@ export default function AdminPortal() {
     id: booking.id,
     reference: booking.reference,
     time: booking.time || "",
+    date: booking.date || "",
+    booked_at: booking.booked_at || "",
     student: booking.student || "Private",
     service: booking.service,
     center: booking.center,

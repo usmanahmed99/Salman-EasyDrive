@@ -186,6 +186,11 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
           form_id, cutoff_hours, base_concurrency, enabled, show_duration
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.concurrency, values.enabled, values.showDuration).run();
+      // Offer the new service at every existing center by default (mirrors center creation).
+      const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+      for (const ctr of allCenters.results) {
+        await env.DB.prepare("INSERT OR IGNORE INTO service_centers(service_id, center_id, enabled) VALUES(?,?,1)").bind(nextId, ctr.id).run();
+      }
       await audit(env, user.id, "create", "service", nextId, body, request);
       return json({ id: nextId }, 201);
     }
@@ -353,20 +358,13 @@ async function route(request: Request, env: Env): Promise<Response> {
   if (path === "/api/public/services" && method === "GET") {
     const centerSlug = url.searchParams.get("centerSlug");
     if (!centerSlug) throw new HttpError(400, "centerSlug is required.");
-    // A service with no service_centers rows is treated as available at all centers.
+    // A service is offered at a center only when an enabled service_centers row links them.
     const results = await env.DB.prepare(`
       SELECT services.* FROM services
       JOIN centers ON centers.slug=? AND centers.enabled=1
+      JOIN service_centers ON service_centers.service_id=services.id
+        AND service_centers.center_id=centers.id AND service_centers.enabled=1
       WHERE services.enabled=1 AND services.deleted_at IS NULL
-        AND (
-          NOT EXISTS (SELECT 1 FROM service_centers WHERE service_centers.service_id=services.id)
-          OR EXISTS (
-            SELECT 1 FROM service_centers
-            WHERE service_centers.service_id=services.id
-              AND service_centers.center_id=centers.id
-              AND service_centers.enabled=1
-          )
-        )
       ORDER BY services.name_en
     `).bind(centerSlug).all<DbService>();
     return json(results.results.map(serviceResponse));

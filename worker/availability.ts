@@ -21,6 +21,7 @@ export async function loadAvailabilityContext(
   ).bind(centerSlug).first<DbCenter>();
   if (!center) throw new HttpError(404, "Location is unavailable.", "center_not_found");
 
+  // A service is offered at a center only when an enabled service_centers row links them.
   const service = await env.DB.prepare(`
     SELECT services.* FROM services
     JOIN service_centers ON service_centers.service_id = services.id

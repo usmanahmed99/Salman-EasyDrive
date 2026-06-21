@@ -439,7 +439,7 @@ export default function PublicBooking() {
     setSlot(undefined);
     getAvailability(center.slug, service.slug, date)
       .then(setSlots)
-      .catch((nextError: Error) => setError(nextError.message))
+      .catch((nextError: Error) => { setSlots([]); setError(nextError.message); })
       .finally(() => setSlotLoading(false));
   }, [center, service, date, stage]);
 
