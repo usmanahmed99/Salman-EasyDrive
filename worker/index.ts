@@ -457,11 +457,17 @@ async function route(request: Request, env: Env): Promise<Response> {
       const fmt = new Intl.DateTimeFormat("en-CA", { hour: "numeric", minute: "2-digit", timeZone: "America/Montreal" });
       const dateFmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "short", day: "numeric", timeZone: "America/Montreal" });
       const bookedFmt = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "America/Montreal" });
+      // SQLite CURRENT_TIMESTAMP yields "YYYY-MM-DD HH:MM:SS" (UTC, no offset); normalise to ISO so Date parses it reliably.
+      const parse = (value: string) => new Date(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}/.test(value) ? value.replace(" ", "T") + "Z" : value);
+      const safe = (formatter: Intl.DateTimeFormat, value: string) => {
+        const d = parse(value);
+        return Number.isNaN(d.getTime()) ? (value || "") : formatter.format(d);
+      };
       return json({ bookings: results.results.map((booking) => ({
         ...booking,
-        time: fmt.format(new Date(booking.start_at)),
-        date: dateFmt.format(new Date(booking.start_at)),
-        booked_at: bookedFmt.format(new Date(booking.created_at)),
+        time: safe(fmt, booking.start_at),
+        date: safe(dateFmt, booking.start_at),
+        booked_at: safe(bookedFmt, booking.created_at),
       })) });
     }
     if (path === "/api/admin/overrides" && method === "GET") {
