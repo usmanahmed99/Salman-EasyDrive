@@ -479,7 +479,13 @@ async function route(request: Request, env: Env): Promise<Response> {
           bookings.calendar_last_error,
           services.name_en AS service, services.slug AS service_slug,
           centers.name AS center, centers.slug AS center_slug,
-          COALESCE(booking_form_responses.student_name, 'Private') AS student
+          COALESCE(booking_form_responses.student_name, 'Private') AS student,
+          (
+            SELECT group_concat(resources.name, ', ')
+            FROM booking_resource_allocations bra
+            JOIN resources ON resources.id = bra.resource_id
+            WHERE bra.booking_id = bookings.id AND resources.type = 'instructor'
+          ) AS instructor
         FROM bookings JOIN services ON services.id=bookings.service_id
         JOIN centers ON centers.id=bookings.center_id
         LEFT JOIN booking_form_responses ON booking_form_responses.booking_id=bookings.id

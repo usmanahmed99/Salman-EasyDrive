@@ -73,6 +73,7 @@ interface AdminBooking {
   serviceSlug?: string;
   center: string;
   centerSlug?: string;
+  instructor?: string;
   status: string;
   calendarLastError?: string;
 }
@@ -450,9 +451,10 @@ function TodayDashboard({
 }) {
   const [selectedDay, setSelectedDay] = useState(montrealToday());
   const [reconciling, setReconciling] = useState(false);
+  const [page, setPage] = useState(0);
   const isToday = selectedDay === montrealToday();
   const dayLabel = isToday ? "Today" : formatDayLabel(selectedDay);
-  const shiftDay = (delta: number) => setSelectedDay((current) => addDays(current, delta));
+  const shiftDay = (delta: number) => { setSelectedDay((current) => addDays(current, delta)); setPage(0); };
 
   const reconcile = async () => {
     setReconciling(true);
@@ -463,6 +465,11 @@ function TodayDashboard({
   const onDay = bookings.filter((booking) => montrealDate(booking.start_at) === selectedDay);
   const active = onDay.filter((booking) => !booking.status.startsWith("cancelled")).sort(byTime);
   const cancelled = onDay.filter((booking) => booking.status.startsWith("cancelled")).sort(byTime);
+
+  const PAGE_SIZE = 8;
+  const pageCount = Math.max(1, Math.ceil(active.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pagedActive = active.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
   const failed = bookings.filter((booking) => booking.status === "calendar_sync_failed");
   const activeInstructors = resources.filter((resource) => resource.type === "instructor" && resource.enabled).length;
   const totalCars = groups.filter((group) => group.type === "cars").reduce((sum, group) => sum + group.capacity, 0);
@@ -508,7 +515,7 @@ function TodayDashboard({
             <div className="flex items-center gap-2">
               <div className="flex items-center rounded-xl border border-slate-200 bg-white">
                 <button className="grid h-9 w-9 place-items-center rounded-l-xl text-slate-500 hover:bg-slate-50" title="Previous day" onClick={() => shiftDay(-1)}><ChevronLeft size={16} /></button>
-                <button className={clsx("min-w-[88px] px-2 text-xs font-bold", isToday ? "text-slate-300" : "text-brand-600 hover:text-brand-700")} disabled={isToday} onClick={() => setSelectedDay(montrealToday())}>{isToday ? formatDayLabel(selectedDay) : "Today"}</button>
+                <button className={clsx("min-w-[88px] px-2 text-xs font-bold", isToday ? "text-slate-300" : "text-brand-600 hover:text-brand-700")} disabled={isToday} onClick={() => { setSelectedDay(montrealToday()); setPage(0); }}>{isToday ? formatDayLabel(selectedDay) : "Today"}</button>
                 <button className="grid h-9 w-9 place-items-center rounded-r-xl text-slate-500 hover:bg-slate-50" title="Next day" onClick={() => shiftDay(1)}><ChevronRight size={16} /></button>
               </div>
               <button className="secondary-button min-h-9 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
@@ -519,7 +526,7 @@ function TodayDashboard({
           </div>
           <div className="divide-y divide-slate-100">
             {active.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-400">No active bookings on this day.</p>}
-            {active.map((booking) => (
+            {pagedActive.map((booking) => (
               <div className="flex items-center gap-3 px-5 py-4 transition hover:bg-slate-50" key={booking.id}>
                 <div className="w-16 shrink-0">
                   <p className="text-sm font-extrabold text-ink">{booking.time}</p>
@@ -527,12 +534,27 @@ function TodayDashboard({
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-bold text-ink">{booking.student}</p>
-                  <p className="truncate text-xs text-slate-500">{booking.service} · {booking.center}</p>
+                  <p className="truncate text-xs text-slate-500">
+                    {booking.service} · {booking.center}
+                    {booking.instructor && <span className="text-slate-400"> · {booking.instructor}</span>}
+                  </p>
                 </div>
                 <StatusBadge status={booking.status} />
               </div>
             ))}
           </div>
+          {active.length > PAGE_SIZE && (
+            <div className="flex items-center justify-between border-t border-slate-100 px-5 py-3 text-xs">
+              <span className="text-slate-500">
+                {safePage * PAGE_SIZE + 1}–{Math.min(safePage * PAGE_SIZE + PAGE_SIZE, active.length)} of {active.length}
+              </span>
+              <div className="flex items-center gap-1">
+                <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30" title="Previous page" disabled={safePage === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}><ChevronLeft size={15} /></button>
+                <span className="px-1 font-semibold text-slate-500">{safePage + 1} / {pageCount}</span>
+                <button className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-30" title="Next page" disabled={safePage >= pageCount - 1} onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}><ChevronRight size={15} /></button>
+              </div>
+            </div>
+          )}
           {cancelled.length > 0 && (
             <details className="border-t border-slate-100">
               <summary className="cursor-pointer select-none px-5 py-3 text-xs font-bold uppercase tracking-wider text-slate-400 hover:bg-slate-50">
@@ -886,6 +908,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [centerFilter, setCenterFilter] = useState("all");
+  const [instructorFilter, setInstructorFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -900,18 +923,24 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
 
   const centerNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
   const statuses = useMemo(() => Array.from(new Set(bookings.map((b) => b.status))).sort(), [bookings]);
+  // A booking may list multiple instructors ("A, B"); split so each is its own filter option.
+  const instructorNames = useMemo(
+    () => Array.from(new Set(bookings.flatMap((b) => (b.instructor ? b.instructor.split(", ") : [])))).sort(),
+    [bookings]
+  );
 
   const filtered = useMemo(() => bookings.filter((booking) => {
-    if (query && !`${booking.student} ${booking.reference} ${booking.service} ${booking.center}`.toLowerCase().includes(query.toLowerCase())) return false;
+    if (query && !`${booking.student} ${booking.reference} ${booking.service} ${booking.center} ${booking.instructor || ""}`.toLowerCase().includes(query.toLowerCase())) return false;
     if (statusFilter !== "all" && booking.status !== statusFilter) return false;
     if (centerFilter !== "all" && booking.center !== centerFilter) return false;
+    if (instructorFilter !== "all" && !(booking.instructor || "").split(", ").includes(instructorFilter)) return false;
     if (dateFrom && booking.start_at < dateFrom) return false;
     if (dateTo && booking.start_at > dateTo + "T23:59:59") return false;
     return true;
-  }), [bookings, query, statusFilter, centerFilter, dateFrom, dateTo]);
+  }), [bookings, query, statusFilter, centerFilter, instructorFilter, dateFrom, dateTo]);
 
-  const hasFilters = statusFilter !== "all" || centerFilter !== "all" || dateFrom || dateTo;
-  const clearFilters = () => { setStatusFilter("all"); setCenterFilter("all"); setDateFrom(""); setDateTo(""); setQuery(""); };
+  const hasFilters = statusFilter !== "all" || centerFilter !== "all" || instructorFilter !== "all" || dateFrom || dateTo;
+  const clearFilters = () => { setStatusFilter("all"); setCenterFilter("all"); setInstructorFilter("all"); setDateFrom(""); setDateTo(""); setQuery(""); };
 
   const act = async (id: string, fn: (id: string) => Promise<void>) => {
     setBusy(id);
@@ -925,7 +954,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
         <div className="flex items-center gap-3">
           <div className="relative w-full max-w-md">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name or booking reference" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name, reference or instructor" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
             <button className="secondary-button min-h-10 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
@@ -945,6 +974,10 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
             <option value="all">All centers</option>
             {centerNames.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
+          <select className="field !w-44 py-2.5 pl-3 pr-8 text-sm" value={instructorFilter} onChange={(e) => setInstructorFilter(e.target.value)}>
+            <option value="all">All instructors</option>
+            {instructorNames.map((i) => <option key={i} value={i}>{i}</option>)}
+          </select>
           <div className="flex items-center gap-1.5 text-xs text-slate-500">
             <input type="date" className="field !w-[160px] py-2.5 px-3 text-sm" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <span>–</span>
@@ -962,11 +995,11 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
         <table className="w-full min-w-[960px] text-left">
           <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-400">
             <tr>
-              {["Date & Time", "Student", "Service", "Center", "Reference", "Booked on", "Status", ""].map((heading, index) => <th className="px-5 py-3" key={index}>{heading}</th>)}
+              {["Date & Time", "Student", "Service", "Instructor", "Center", "Reference", "Booked on", "Status", ""].map((heading, index) => <th className="px-5 py-3" key={index}>{heading}</th>)}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
-            {filtered.length === 0 && <tr><td colSpan={8} className="px-5 py-10 text-center text-slate-400">No bookings found.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={9} className="px-5 py-10 text-center text-slate-400">No bookings found.</td></tr>}
             {filtered.map((booking) => (
               <tr className="hover:bg-slate-50" key={booking.id}>
                 <td className="px-5 py-4">
@@ -975,6 +1008,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
                 </td>
                 <td className="px-5 py-4 font-semibold text-ink">{booking.student}</td>
                 <td className="px-5 py-4 text-slate-600">{booking.service}</td>
+                <td className="px-5 py-4 text-slate-600">{booking.instructor || <span className="text-slate-300">—</span>}</td>
                 <td className="px-5 py-4 text-slate-600">{booking.center}</td>
                 <td className="px-5 py-4 font-mono text-xs text-slate-500">{booking.reference}</td>
                 <td className="px-5 py-4 text-xs text-slate-400">{booking.booked_at}</td>
@@ -2491,6 +2525,7 @@ export default function AdminPortal() {
     serviceSlug: booking.service_slug || undefined,
     center: booking.center,
     centerSlug: booking.center_slug || undefined,
+    instructor: booking.instructor || undefined,
     status: booking.status,
     start_at: booking.start_at,
     calendarLastError: booking.calendar_last_error || undefined
