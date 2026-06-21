@@ -132,13 +132,13 @@ function StatusBadge({ status }: { status: string }) {
 function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-0 backdrop-blur-sm sm:items-center sm:p-6">
-      <div className="max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
-        <div className="sticky top-0 flex items-center justify-between border-b border-slate-100 bg-white/95 px-6 py-4 backdrop-blur">
-          <h2 className="text-lg font-extrabold text-ink">{title}</h2>
+      <div className="max-h-[96dvh] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 border-b border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 sm:py-4">
+          <h2 className="min-w-0 text-base font-extrabold text-ink sm:text-lg">{title}</h2>
           <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 hover:bg-slate-100" onClick={onClose}><X size={18} /></button>
         </div>
-        <div className="p-6">{children}</div>
-        {footer && <div className="sticky bottom-0 flex flex-col-reverse gap-3 border-t border-slate-100 bg-white/95 px-6 py-4 backdrop-blur sm:flex-row sm:justify-end">{footer}</div>}
+        <div className="p-4 sm:p-6">{children}</div>
+        {footer && <div className="sticky bottom-0 z-10 flex flex-col-reverse gap-2 border-t border-slate-100 bg-white/95 px-4 py-3 backdrop-blur sm:flex-row sm:justify-end sm:gap-3 sm:px-6 sm:py-4">{footer}</div>}
       </div>
     </div>
   );
@@ -202,15 +202,15 @@ function useConfirm() {
   const confirm = (message: string): Promise<boolean> =>
     new Promise((resolve) => setState({ message, resolve }));
   const dialog = state ? (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/50 p-6 backdrop-blur-sm">
-      <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-2xl">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink/50 p-4 backdrop-blur-sm sm:p-6">
+      <div className="w-full max-w-sm rounded-2xl bg-white p-5 shadow-2xl sm:p-6">
         <div className="flex items-start gap-3">
           <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-red-50 text-red-600"><AlertTriangle size={20} /></div>
           <p className="mt-1.5 text-sm font-medium text-slate-700">{state.message}</p>
         </div>
-        <div className="mt-6 flex justify-end gap-3">
-          <button className="secondary-button px-4 py-2 text-sm" onClick={() => { state.resolve(false); setState(null); }}>Cancel</button>
-          <button className="rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700" onClick={() => { state.resolve(true); setState(null); }}>Confirm</button>
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end sm:gap-3">
+          <button className="secondary-button min-h-11 px-4 py-2 text-sm" onClick={() => { state.resolve(false); setState(null); }}>Cancel</button>
+          <button className="min-h-11 rounded-xl bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-700" onClick={() => { state.resolve(true); setState(null); }}>Confirm</button>
         </div>
       </div>
     </div>
@@ -507,27 +507,27 @@ function TodayDashboard({
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(300px,0.7fr)]">
         <div className="card overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-4">
+          <div className="flex flex-col gap-3 border-b border-slate-100 px-4 py-4 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <h2 className="font-extrabold text-ink">{dayLabel}'s bookings</h2>
               <p className="mt-0.5 text-xs text-slate-500">{active.length} active{cancelled.length ? ` · ${cancelled.length} cancelled` : ""}</p>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center rounded-xl border border-slate-200 bg-white">
+            <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center">
+              <div className="col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-white sm:col-span-1 sm:justify-start">
                 <button className="grid h-9 w-9 place-items-center rounded-l-xl text-slate-500 hover:bg-slate-50" title="Previous day" onClick={() => shiftDay(-1)}><ChevronLeft size={16} /></button>
                 <button className={clsx("min-w-[88px] px-2 text-xs font-bold", isToday ? "text-slate-300" : "text-brand-600 hover:text-brand-700")} disabled={isToday} onClick={() => { setSelectedDay(montrealToday()); setPage(0); }}>{isToday ? formatDayLabel(selectedDay) : "Today"}</button>
                 <button className="grid h-9 w-9 place-items-center rounded-r-xl text-slate-500 hover:bg-slate-50" title="Next day" onClick={() => shiftDay(1)}><ChevronRight size={16} /></button>
               </div>
-              <button className="secondary-button min-h-9 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
+              <button className="secondary-button min-h-10 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
                 {reconciling ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Reconcile calendar
               </button>
-              <button className="secondary-button min-h-9 px-3 py-2 text-xs" onClick={() => openSection("bookings")}><ListFilter size={15} /> All bookings</button>
+              <button className="secondary-button min-h-10 px-3 py-2 text-xs" onClick={() => openSection("bookings")}><ListFilter size={15} /> All bookings</button>
             </div>
           </div>
           <div className="divide-y divide-slate-100">
             {active.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-400">No active bookings on this day.</p>}
             {pagedActive.map((booking) => (
-              <div className="flex items-center gap-3 px-5 py-4 transition hover:bg-slate-50" key={booking.id}>
+              <div className="flex flex-wrap items-center gap-3 px-4 py-4 transition hover:bg-slate-50 sm:flex-nowrap sm:px-5" key={booking.id}>
                 <div className="w-16 shrink-0">
                   <p className="text-sm font-extrabold text-ink">{booking.time}</p>
                   <p className="mt-0.5 text-[10px] font-bold text-slate-400">{booking.reference}</p>
@@ -539,7 +539,7 @@ function TodayDashboard({
                     {booking.instructor && <span className="text-slate-400"> · {booking.instructor}</span>}
                   </p>
                 </div>
-                <StatusBadge status={booking.status} />
+                <div className="ml-16 sm:ml-0"><StatusBadge status={booking.status} /></div>
               </div>
             ))}
           </div>
@@ -562,7 +562,7 @@ function TodayDashboard({
               </summary>
               <div className="divide-y divide-slate-100">
                 {cancelled.map((booking) => (
-                  <div className="flex items-center gap-3 px-5 py-4 opacity-70" key={booking.id}>
+                  <div className="flex flex-wrap items-center gap-3 px-4 py-4 opacity-70 sm:flex-nowrap sm:px-5" key={booking.id}>
                     <div className="w-16 shrink-0">
                       <p className="text-sm font-extrabold text-slate-400 line-through">{booking.time}</p>
                       <p className="mt-0.5 text-[10px] font-bold text-slate-400">{booking.reference}</p>
@@ -571,7 +571,7 @@ function TodayDashboard({
                       <p className="truncate text-sm font-bold text-slate-500">{booking.student}</p>
                       <p className="truncate text-xs text-slate-400">{booking.service} · {booking.center}</p>
                     </div>
-                    <StatusBadge status={booking.status} />
+                    <div className="ml-16 sm:ml-0"><StatusBadge status={booking.status} /></div>
                   </div>
                 ))}
               </div>
@@ -908,6 +908,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [centerFilter, setCenterFilter] = useState("all");
+  const [serviceFilter, setServiceFilter] = useState("all");
   const [instructorFilter, setInstructorFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
@@ -922,6 +923,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
   };
 
   const centerNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
+  const serviceNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.service))).sort(), [bookings]);
   const statuses = useMemo(() => Array.from(new Set(bookings.map((b) => b.status))).sort(), [bookings]);
   // A booking may list multiple instructors ("A, B"); split so each is its own filter option.
   const instructorNames = useMemo(
@@ -933,14 +935,15 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
     if (query && !`${booking.student} ${booking.reference} ${booking.service} ${booking.center} ${booking.instructor || ""}`.toLowerCase().includes(query.toLowerCase())) return false;
     if (statusFilter !== "all" && booking.status !== statusFilter) return false;
     if (centerFilter !== "all" && booking.center !== centerFilter) return false;
+    if (serviceFilter !== "all" && booking.service !== serviceFilter) return false;
     if (instructorFilter !== "all" && !(booking.instructor || "").split(", ").includes(instructorFilter)) return false;
     if (dateFrom && booking.start_at < dateFrom) return false;
     if (dateTo && booking.start_at > dateTo + "T23:59:59") return false;
     return true;
-  }), [bookings, query, statusFilter, centerFilter, instructorFilter, dateFrom, dateTo]);
+  }), [bookings, query, statusFilter, centerFilter, serviceFilter, instructorFilter, dateFrom, dateTo]);
 
-  const hasFilters = statusFilter !== "all" || centerFilter !== "all" || instructorFilter !== "all" || dateFrom || dateTo;
-  const clearFilters = () => { setStatusFilter("all"); setCenterFilter("all"); setInstructorFilter("all"); setDateFrom(""); setDateTo(""); setQuery(""); };
+  const hasFilters = statusFilter !== "all" || centerFilter !== "all" || serviceFilter !== "all" || instructorFilter !== "all" || dateFrom || dateTo;
+  const clearFilters = () => { setStatusFilter("all"); setCenterFilter("all"); setServiceFilter("all"); setInstructorFilter("all"); setDateFrom(""); setDateTo(""); setQuery(""); };
 
   const act = async (id: string, fn: (id: string) => Promise<void>) => {
     setBusy(id);
@@ -950,48 +953,52 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
   return (
     <>
     <div className="card overflow-hidden">
-      <div className="flex flex-col gap-3 border-b border-slate-100 p-5">
-        <div className="flex items-center gap-3">
-          <div className="relative w-full max-w-md">
+      <div className="flex flex-col gap-4 border-b border-slate-100 p-4 sm:p-5">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <div className="relative w-full lg:max-w-md">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
             <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name, reference or instructor" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
-            <button className="secondary-button min-h-10 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
+          <div className="grid grid-cols-2 gap-2 lg:ml-auto lg:flex lg:shrink-0 lg:items-center">
+            <button className="secondary-button min-h-11 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
               {reconciling ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Reconcile calendar
             </button>
-            <button className="primary-button min-h-10 px-3 py-2 text-xs" onClick={() => setCreating(true)}>
+            <button className="primary-button min-h-11 px-3 py-2 text-xs" onClick={() => setCreating(true)}>
               <Plus size={15} /> New booking
             </button>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          <select className="field !w-44 py-2.5 pl-3 pr-8 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:flex-wrap xl:items-center">
+          <select className="field col-span-1 py-2.5 pl-3 pr-8 text-sm xl:!w-44" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
             <option value="all">All statuses</option>
             {statuses.map((s) => <option key={s} value={s}>{s.replace(/_/g, " ")}</option>)}
           </select>
-          <select className="field !w-44 py-2.5 pl-3 pr-8 text-sm" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
+          <select className="field col-span-1 py-2.5 pl-3 pr-8 text-sm xl:!w-44" value={centerFilter} onChange={(e) => setCenterFilter(e.target.value)}>
             <option value="all">All centers</option>
             {centerNames.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
-          <select className="field !w-44 py-2.5 pl-3 pr-8 text-sm" value={instructorFilter} onChange={(e) => setInstructorFilter(e.target.value)}>
+          <select className="field col-span-1 py-2.5 pl-3 pr-8 text-sm xl:!w-44" value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
+            <option value="all">All services</option>
+            {serviceNames.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <select className="field col-span-2 py-2.5 pl-3 pr-8 text-sm sm:col-span-1 xl:!w-44" value={instructorFilter} onChange={(e) => setInstructorFilter(e.target.value)}>
             <option value="all">All instructors</option>
             {instructorNames.map((i) => <option key={i} value={i}>{i}</option>)}
           </select>
-          <div className="flex items-center gap-1.5 text-xs text-slate-500">
-            <input type="date" className="field !w-[160px] py-2.5 px-3 text-sm" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
+          <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-1.5 text-xs text-slate-500 sm:col-span-3 xl:flex">
+            <input type="date" className="field min-w-0 py-2.5 px-2 text-sm xl:!w-[160px] xl:px-3" aria-label="From date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
             <span>–</span>
-            <input type="date" className="field !w-[160px] py-2.5 px-3 text-sm" aria-label="To date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+            <input type="date" className="field min-w-0 py-2.5 px-2 text-sm xl:!w-[160px] xl:px-3" aria-label="To date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
           </div>
           {hasFilters && (
-            <button className="flex h-10 items-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800" onClick={clearFilters}>
+            <button className="flex h-10 items-center justify-center gap-1 rounded-lg px-2 text-xs font-semibold text-slate-500 hover:bg-slate-100 hover:text-slate-800 xl:justify-start" onClick={clearFilters}>
               <X size={14} /> Clear
             </button>
           )}
-          <span className="ml-auto text-xs text-slate-500">{filtered.length} of {bookings.length}</span>
+          <span className="self-center text-right text-xs text-slate-500 xl:ml-auto">{filtered.length} of {bookings.length}</span>
         </div>
       </div>
-      <div className="overflow-x-auto">
+      <div className="hidden overflow-x-auto md:block">
         <table className="w-full min-w-[960px] text-left">
           <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-400">
             <tr>
@@ -1041,6 +1048,56 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
             ))}
           </tbody>
         </table>
+      </div>
+      <div className="divide-y divide-slate-100 md:hidden">
+        {filtered.length === 0 && <p className="px-4 py-10 text-center text-sm text-slate-400">No bookings found.</p>}
+        {filtered.map((booking) => (
+          <article className="p-4" key={booking.id}>
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <p className="font-extrabold text-ink">{booking.student}</p>
+                <p className="mt-1 text-sm font-bold text-brand-700">{booking.time} <span className="font-medium text-slate-500">{booking.date}</span></p>
+              </div>
+              <StatusBadge status={booking.status} />
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+              <div className="min-w-0">
+                <dt className="font-bold uppercase tracking-wider text-slate-400">Service</dt>
+                <dd className="mt-1 text-sm leading-5 text-slate-700">{booking.service}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-bold uppercase tracking-wider text-slate-400">Center</dt>
+                <dd className="mt-1 text-sm leading-5 text-slate-700">{booking.center}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-bold uppercase tracking-wider text-slate-400">Instructor</dt>
+                <dd className="mt-1 text-sm leading-5 text-slate-700">{booking.instructor || "—"}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="font-bold uppercase tracking-wider text-slate-400">Reference</dt>
+                <dd className="mt-1 truncate font-mono text-sm text-slate-600">{booking.reference}</dd>
+              </div>
+            </dl>
+            {booking.calendarLastError === "event_deleted_externally" && (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">Calendar event was deleted externally.</p>
+            )}
+            {!booking.status.startsWith("cancelled") && (
+              <div className="mt-4 grid grid-cols-2 gap-2 border-t border-slate-100 pt-4">
+                {booking.status === "calendar_sync_failed" ? (
+                  <button className="secondary-button col-span-2 min-h-10 px-3 py-2 text-xs text-amber-700" disabled={busy === booking.id} onClick={() => act(booking.id, onResync)}>
+                    {busy === booking.id ? <LoaderCircle className="animate-spin" size={15} /> : <RefreshCw size={15} />} Retry calendar sync
+                  </button>
+                ) : null}
+                <button className="secondary-button min-h-10 px-3 py-2 text-xs" onClick={() => setRescheduling(booking)}>
+                  <CalendarDays size={15} /> Reschedule
+                </button>
+                <button className="secondary-button min-h-10 border-red-200 px-3 py-2 text-xs text-red-600 hover:bg-red-50" disabled={busy === booking.id} onClick={() => act(booking.id, onCancel)}>
+                  <X size={15} /> Cancel
+                </button>
+              </div>
+            )}
+          </article>
+        ))}
       </div>
     </div>
     {creating && (
@@ -1414,9 +1471,9 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
   return (
     <>
       <div className="card overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <p className="text-sm text-slate-500">Drag to reorder · Configure duration, price, resources and booking rules.</p>
-          <button className="primary-button min-h-10 px-4 py-2" onClick={() => setEditing("new")}><Plus size={16} /> Add service</button>
+          <button className="primary-button min-h-10 w-full shrink-0 px-4 py-2 sm:w-auto" onClick={() => setEditing("new")}><Plus size={16} /> Add service</button>
         </div>
         <div className="divide-y divide-slate-100">
           {ordered.map((service) => {
@@ -1426,7 +1483,7 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
             return (
               <div
                 className={clsx(
-                  "flex flex-col gap-4 p-5 sm:flex-row sm:items-center transition",
+                  "flex flex-col gap-4 p-4 transition sm:flex-row sm:items-center sm:p-5",
                   dragId === service.id && "opacity-40",
                   savingOrder && "pointer-events-none"
                 )}
@@ -1444,21 +1501,21 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
                 >
                   <GripVertical size={18} />
                 </button>
-                <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600"><Gauge size={21} /></div>
+                <div className="hidden h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600 sm:grid"><Gauge size={21} /></div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="font-extrabold text-ink">{service.name.en}</p>
                     <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", service.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{service.enabled ? "Enabled" : "Disabled"}</span>
                   </div>
-                  <p className="mt-1 truncate text-xs text-slate-500">{service.durationMinutes} min · {service.priceDisplay || "no price"} · {service.slug}</p>
+                  <p className="mt-1 break-words text-xs text-slate-500 sm:truncate">{service.durationMinutes} min · {service.priceDisplay || "no price"} · {service.slug}</p>
                   {assignedCenters.length > 0 && (
                     <p className="mt-1 text-xs text-slate-400">{assignedCenters.join(" · ")}</p>
                   )}
                 </div>
-                <div className="flex items-center gap-5 text-xs">
-                  <div><p className="text-slate-400">Requires</p><p className="mt-1 font-bold capitalize text-ink">{requirementLabel(service.id)}</p></div>
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3 text-xs sm:flex sm:items-center sm:gap-5">
+                  <div className="col-span-2 sm:col-span-1"><p className="text-slate-400">Requires</p><p className="mt-1 font-bold capitalize text-ink">{requirementLabel(service.id)}</p></div>
                   <button className="secondary-button min-h-10 px-4 py-2" onClick={async () => { await loadCenterIds(service.id); setEditing(service); }}>Edit</button>
-                  <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" onClick={() => remove(service)}><Trash2 size={15} /></button>
+                  <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label={`Disable ${service.name.en}`} onClick={() => remove(service)}><Trash2 size={15} /></button>
                 </div>
               </div>
             );
@@ -1624,9 +1681,9 @@ function ResourcesScreen({ resources, groups, centers, reload, toast }: { resour
   return (
     <div className="space-y-8">
       <section>
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <h2 className="text-sm font-bold uppercase tracking-wider text-slate-400">Instructors (named)</h2>
-          <button className="primary-button min-h-9 px-3 py-2 text-xs" onClick={() => setEditing("new")}><Plus size={15} /> Add instructor</button>
+          <button className="primary-button min-h-10 w-full px-3 py-2 text-xs sm:w-auto" onClick={() => setEditing("new")}><Plus size={15} /> Add instructor</button>
         </div>
         {instructorsByCenter.length > 0 ? instructorsByCenter.map(({ center, instructors: centerInstructors }) => (
           <div key={center.id} className="mb-6">
@@ -1823,21 +1880,23 @@ function AvailabilityScreen({ centers, services, groups, toast }: { centers: Cen
         {loading ? <div className="p-6"><div className="skeleton h-64 rounded-xl" /></div> : (
           <div className="divide-y divide-slate-100">
             {hours.map((row) => (
-              <div className="flex items-center gap-4 px-5 py-3" key={row.dayOfWeek}>
-                <label className="flex w-40 items-center gap-3">
+              <div className="grid grid-cols-2 gap-3 px-4 py-4 sm:flex sm:items-center sm:gap-4 sm:px-5 sm:py-3" key={row.dayOfWeek}>
+                <label className="col-span-2 flex items-center gap-3 sm:w-40">
                   <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={row.enabled} onChange={(event) => update(row.dayOfWeek, { enabled: event.target.checked })} />
                   <span className="text-sm font-bold text-ink">{WEEKDAYS[row.dayOfWeek]}</span>
                 </label>
-                <input type="time" className="field max-w-[140px] disabled:opacity-40" disabled={!row.enabled} value={row.startTime} onChange={(event) => update(row.dayOfWeek, { startTime: event.target.value })} />
-                <span className="text-slate-400">to</span>
-                <input type="time" className="field max-w-[140px] disabled:opacity-40" disabled={!row.enabled} value={row.endTime} onChange={(event) => update(row.dayOfWeek, { endTime: event.target.value })} />
-                {!row.enabled && <span className="text-xs font-semibold text-slate-400">Closed</span>}
+                <div className="col-span-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:contents">
+                  <input type="time" className="field min-w-0 px-2 disabled:opacity-40 sm:max-w-[140px] sm:px-4" disabled={!row.enabled} value={row.startTime} onChange={(event) => update(row.dayOfWeek, { startTime: event.target.value })} />
+                  <span className="text-sm text-slate-400">to</span>
+                  <input type="time" className="field min-w-0 px-2 disabled:opacity-40 sm:max-w-[140px] sm:px-4" disabled={!row.enabled} value={row.endTime} onChange={(event) => update(row.dayOfWeek, { endTime: event.target.value })} />
+                </div>
+                {!row.enabled && <span className="col-span-2 text-xs font-semibold text-slate-400 sm:col-span-1">Closed</span>}
               </div>
             ))}
           </div>
         )}
-        <div className="flex justify-end border-t border-slate-100 p-5">
-          <button className="primary-button" disabled={saving || loading} onClick={save}>{saving && <LoaderCircle className="animate-spin" size={16} />} Save business hours</button>
+        <div className="flex justify-end border-t border-slate-100 p-4 sm:p-5">
+          <button className="primary-button w-full sm:w-auto" disabled={saving || loading} onClick={save}>{saving && <LoaderCircle className="animate-spin" size={16} />} Save business hours</button>
         </div>
       </div>
 
@@ -2055,20 +2114,20 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
           </div>
         </div>
       )}
-      <div className="card overflow-hidden">
-        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+      <div className="card min-w-0 overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
           <div className="min-w-0 flex-1">
             <input className="w-full border-0 bg-transparent text-lg font-extrabold text-ink focus:outline-none" value={name} onChange={(event) => setName(event.target.value)} />
             <p className="mt-1 text-xs text-slate-500">{schema?.fields.length || 0} fields · publishing creates a new version</p>
           </div>
-          <button className="primary-button min-h-10 px-4 py-2" disabled={saving || loading || !schema} onClick={publish}>{saving && <LoaderCircle className="animate-spin" size={16} />} Publish changes</button>
+          <button className="primary-button min-h-10 w-full shrink-0 px-4 py-2 sm:w-auto" disabled={saving || loading || !schema} onClick={publish}>{saving && <LoaderCircle className="animate-spin" size={16} />} Publish changes</button>
         </div>
-        {loading || !schema ? <div className="p-5"><div className="skeleton h-72 rounded-xl" /></div> : (
-          <div className="space-y-3 bg-slate-50/60 p-5">
+        {loading || !schema ? <div className="p-4 sm:p-5"><div className="skeleton h-72 rounded-xl" /></div> : (
+          <div className="space-y-3 bg-slate-50/60 p-3 sm:p-5">
             {schema.fields.map((field, index) => (
               <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm" key={field.id}>
-                <div className="flex items-start gap-3">
-                  <div className="flex flex-col gap-1 pt-1 text-slate-300">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+                  <div className="flex items-center justify-between text-slate-300 sm:flex-col sm:gap-1 sm:pt-1">
                     <button className="hover:text-slate-600 disabled:opacity-30" disabled={index === 0} onClick={() => moveField(index, -1)}>▲</button>
                     <GripVertical size={14} />
                     <button className="hover:text-slate-600 disabled:opacity-30" disabled={index === schema.fields.length - 1} onClick={() => moveField(index, 1)}>▼</button>
@@ -2083,12 +2142,13 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
                       </select>
                     </label>
                   </div>
-                  <button className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => removeField(field.id)}><Trash2 size={15} /></button>
+                  <button className="absolute right-5 mt-0 hidden h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 sm:static sm:grid" onClick={() => removeField(field.id)}><Trash2 size={15} /></button>
                 </div>
                 <div className="mt-3 flex flex-wrap gap-4 border-t border-slate-100 pt-3 text-xs">
                   <label className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={field.required} onChange={(event) => updateField(field.id, { required: event.target.checked })} /> Required</label>
                   <label className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={Boolean(field.calendarVisible)} onChange={(event) => updateField(field.id, { calendarVisible: event.target.checked })} /> Show on Calendar event</label>
                   <label className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={Boolean(field.adminListVisible)} onChange={(event) => updateField(field.id, { adminListVisible: event.target.checked })} /> Show in admin list</label>
+                  <button className="ml-auto inline-flex items-center gap-1.5 font-bold text-red-600 sm:hidden" onClick={() => removeField(field.id)}><Trash2 size={14} /> Remove</button>
                 </div>
               </div>
             ))}
@@ -2203,10 +2263,10 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
       <div className="space-y-6">
         <div className="card p-6">
-          <div className="flex items-start gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:gap-4">
             <div className="grid h-12 w-12 place-items-center rounded-xl bg-brand-50 text-brand-600"><CalendarDays size={24} /></div>
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="font-extrabold text-ink">{connection ? "Google Calendar connected" : "Google Calendar not connected"}</h2>
                 {connection && <StatusBadge status={connection.status === "connected" ? "confirmed" : "calendar_sync_failed"} />}
               </div>
@@ -2217,7 +2277,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
             <a className="primary-button mt-5" href="/api/admin/calendar/connect"><Link2 size={16} /> Connect Google account</a>
           )}
           {connection && (
-            <div className="mt-5 flex flex-wrap gap-3">
+            <div className="mt-5 grid gap-2 sm:flex sm:flex-wrap sm:gap-3">
               <button className="secondary-button" disabled={listing} onClick={loadCalendars}>{listing ? <LoaderCircle className="animate-spin" size={16} /> : <RefreshCw size={16} />} Load available calendars</button>
               <a className="secondary-button" href="/api/admin/calendar/connect"><Link2 size={16} /> Reconnect / reauthorise</a>
             </div>
@@ -2258,7 +2318,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
               )}
             </div>
             <div className="mt-3 flex justify-end">
-              <button className="primary-button min-h-10 px-4 py-2" disabled={saving || !mappingId} onClick={addMapping}>{saving && <LoaderCircle className="animate-spin" size={16} />} Add mapping</button>
+              <button className="primary-button min-h-10 w-full px-4 py-2 sm:w-auto" disabled={saving || !mappingId} onClick={addMapping}>{saving && <LoaderCircle className="animate-spin" size={16} />} Add mapping</button>
             </div>
           </div>
         </div>
@@ -2301,7 +2361,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
               />
             </label>
             <div className="flex justify-end">
-              <button className="primary-button min-h-10 px-4 py-2" disabled={savingTemplate} onClick={saveTemplate}>
+              <button className="primary-button min-h-10 w-full px-4 py-2 sm:w-auto" disabled={savingTemplate} onClick={saveTemplate}>
                 {savingTemplate && <LoaderCircle className="animate-spin" size={16} />} Save template
               </button>
             </div>
@@ -2362,7 +2422,7 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
       </div>
       <div className="divide-y divide-slate-100">
         {named.map((resource) => (
-          <div className="flex items-center gap-3 px-5 py-4" key={resource.id}>
+          <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:px-5" key={resource.id}>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-bold text-ink">{resource.name} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">{resource.type}</span></p>
               {available ? (
@@ -2380,7 +2440,7 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
             </div>
             {available && (
               <button
-                className="primary-button shrink-0 px-3 py-1.5 text-xs"
+                className="primary-button min-h-10 w-full shrink-0 px-3 py-1.5 text-xs sm:w-auto"
                 disabled={saving === resource.id}
                 onClick={() => save(resource)}
               >
@@ -2663,7 +2723,7 @@ export default function AdminPortal() {
   return (
     <div className="min-h-screen bg-cream">
       {toast.toast && (
-        <div className="fixed right-4 top-4 z-[60] max-w-sm">
+        <div className="fixed inset-x-3 top-3 z-[60] sm:left-auto sm:right-4 sm:top-4 sm:max-w-sm">
           <Banner kind={toast.toast.kind} message={toast.toast.message} onClose={toast.clear} />
         </div>
       )}
@@ -2690,7 +2750,7 @@ export default function AdminPortal() {
 
       {mobileNav && (
         <div className="fixed inset-0 z-50 bg-ink/50 backdrop-blur-sm lg:hidden" onClick={() => setMobileNav(false)}>
-          <aside className="h-full w-72 bg-ink p-4" onClick={(event) => event.stopPropagation()}>
+          <aside className="h-full w-[min(18rem,calc(100vw-2rem))] overflow-y-auto bg-ink p-4" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between p-1"><AdminLogo /><button className="text-white" onClick={() => setMobileNav(false)}><X /></button></div>
             <nav className="mt-7 space-y-1">
               {nav.map((item) => (
@@ -2705,21 +2765,21 @@ export default function AdminPortal() {
 
       <div className="lg:pl-64">
         <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 px-4 py-3 backdrop-blur sm:px-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+          <div className="flex min-w-0 items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
               <button className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 lg:hidden" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
-              <div>
-                <h1 className="text-lg font-extrabold text-ink">{title}</h1>
+              <div className="min-w-0">
+                <h1 className="truncate text-base font-extrabold text-ink sm:text-lg">{title}</h1>
                 <p className="hidden text-xs text-slate-500 sm:block">{section === "dashboard" ? new Date().toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" }) + " · America/Montreal" : "Easy Driving School operations"}</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex shrink-0 items-center gap-2">
               <button className="secondary-button hidden min-h-10 px-3 py-2 sm:inline-flex" onClick={() => openSection("docs")}><HelpCircle size={16} /> Help</button>
-              <a className="primary-button min-h-10 px-3 py-2" href="/book" target="_blank"><Gauge size={16} /><span className="hidden sm:inline">Open booking page</span></a>
+              <a className="primary-button h-10 min-h-10 w-10 px-0 py-0 sm:h-auto sm:w-auto sm:px-3 sm:py-2" href="/book" target="_blank" aria-label="Open booking page" title="Open booking page"><Gauge size={16} /><span className="hidden sm:inline">Open booking page</span></a>
             </div>
           </div>
         </header>
-        <main className="p-4 sm:p-6">{content()}</main>
+        <main className="min-w-0 p-3 sm:p-6">{content()}</main>
       </div>
       {confirmDialogEl}
     </div>
