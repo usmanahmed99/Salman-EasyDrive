@@ -130,6 +130,12 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function Modal({ title, onClose, children, footer }: { title: string; onClose: () => void; children: React.ReactNode; footer?: React.ReactNode }) {
+  useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previousOverflow; };
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-0 backdrop-blur-sm sm:items-center sm:p-6">
       <div className="max-h-[96dvh] w-full max-w-2xl overflow-y-auto rounded-t-3xl bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-3xl" onClick={(event) => event.stopPropagation()}>
@@ -805,7 +811,7 @@ function AvailabilityPicker({ centerSlug, serviceSlug, timezone, value, onChange
 
   return (
     <div>
-      <div className="flex items-end gap-3">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
         <Field label="Day"><input className="field" type="date" value={day} onChange={(e) => setDay(e.target.value)} /></Field>
         <p className="pb-3 text-xs text-slate-500">{loading ? "Loading times…" : slots ? `${slots.filter((s) => !slotIsBlocked(s)).length} bookable` : ""}</p>
       </div>
@@ -981,7 +987,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
             <option value="all">All services</option>
             {serviceNames.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          <select className="field col-span-2 py-2.5 pl-3 pr-8 text-sm sm:col-span-1 xl:!w-44" value={instructorFilter} onChange={(e) => setInstructorFilter(e.target.value)}>
+          <select className="field col-span-1 py-2.5 pl-3 pr-8 text-sm xl:!w-44" value={instructorFilter} onChange={(e) => setInstructorFilter(e.target.value)}>
             <option value="all">All instructors</option>
             {instructorNames.map((i) => <option key={i} value={i}>{i}</option>)}
           </select>
@@ -2528,7 +2534,7 @@ function SignIn({ devLoginAvailable, onDevLogin }: { devLoginAvailable: boolean;
 
   return (
     <div className="grid min-h-screen place-items-center bg-cream p-6">
-      <div className="card w-full max-w-md p-8">
+      <div className="card w-full max-w-md p-6 sm:p-8">
         <div className="mb-6 flex justify-center"><div className="grid h-14 w-14 place-items-center rounded-2xl bg-brand-600 text-white"><Gauge size={28} /></div></div>
         <h1 className="text-center text-2xl font-extrabold text-ink">Easy Driving Operations</h1>
         <p className="mt-2 text-center text-sm text-slate-500">Sign in to manage centers, services and bookings.</p>
@@ -2767,15 +2773,15 @@ export default function AdminPortal() {
         <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 px-4 py-3 backdrop-blur sm:px-6">
           <div className="flex min-w-0 items-center justify-between gap-3">
             <div className="flex min-w-0 items-center gap-3">
-              <button className="grid h-10 w-10 place-items-center rounded-xl border border-slate-200 lg:hidden" onClick={() => setMobileNav(true)}><Menu size={20} /></button>
+              <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 lg:hidden" onClick={() => setMobileNav(true)} aria-label="Open navigation" title="Open navigation"><Menu size={20} /></button>
               <div className="min-w-0">
                 <h1 className="truncate text-base font-extrabold text-ink sm:text-lg">{title}</h1>
                 <p className="hidden text-xs text-slate-500 sm:block">{section === "dashboard" ? new Date().toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" }) + " · America/Montreal" : "Easy Driving School operations"}</p>
               </div>
             </div>
             <div className="flex shrink-0 items-center gap-2">
-              <button className="secondary-button hidden min-h-10 px-3 py-2 sm:inline-flex" onClick={() => openSection("docs")}><HelpCircle size={16} /> Help</button>
-              <a className="primary-button h-10 min-h-10 w-10 px-0 py-0 sm:h-auto sm:w-auto sm:px-3 sm:py-2" href="/book" target="_blank" aria-label="Open booking page" title="Open booking page"><Gauge size={16} /><span className="hidden sm:inline">Open booking page</span></a>
+              <button className="secondary-button h-10 min-h-10 w-10 !px-0 !py-0 sm:h-auto sm:w-auto sm:!px-3 sm:!py-2" onClick={() => openSection("docs")} aria-label="Help" title="Help"><HelpCircle className="shrink-0" size={17} /><span className="hidden sm:inline">Help</span></button>
+              <a className="primary-button h-10 min-h-10 w-10 !px-0 !py-0 sm:h-auto sm:w-auto sm:!px-3 sm:!py-2" href="/book" target="_blank" aria-label="Open booking page" title="Open booking page"><Gauge className="shrink-0" size={18} strokeWidth={2.5} /><span className="hidden sm:inline">Open booking page</span></a>
             </div>
           </div>
         </header>

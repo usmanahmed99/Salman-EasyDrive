@@ -61,14 +61,14 @@ function formatDateLong(date: string, language: Language) {
 
 function Logo({ compact = false }: { compact?: boolean }) {
   return (
-    <div className="flex items-center gap-3">
-      <div className="grid h-11 w-11 place-items-center rounded-2xl bg-brand-600 text-white shadow-lg shadow-brand-600/25">
+    <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+      <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-600 text-white shadow-lg shadow-brand-600/25 sm:h-11 sm:w-11 sm:rounded-2xl">
         <Gauge size={24} strokeWidth={2.4} />
       </div>
       {!compact && (
-        <div>
+        <div className="min-w-0">
           <div className="text-[15px] font-extrabold leading-tight text-ink">Easy Driving</div>
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Driving School</div>
+          <div className="truncate text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400 sm:text-[11px] sm:tracking-[0.18em]">Driving School</div>
         </div>
       )}
     </div>
@@ -80,9 +80,9 @@ function Progress({ stage, language }: { stage: Stage; language: Language }) {
   const steps = [t.location, t.service, t.schedule, t.details];
   const current = stageIndex[stage];
   return (
-    <div className="mx-auto flex max-w-2xl items-center px-1" aria-label="Booking progress">
+    <div className="mx-auto flex w-full min-w-0 max-w-2xl items-center overflow-hidden px-1" aria-label="Booking progress">
       {steps.map((label, index) => (
-        <div className={clsx("flex items-center", index < steps.length - 1 && "flex-1")} key={label}>
+        <div className={clsx("flex min-w-0 items-center", index < steps.length - 1 && "flex-1")} key={label}>
           <div className="flex min-w-0 items-center gap-2">
             <div
               className={clsx(
@@ -104,7 +104,7 @@ function Progress({ stage, language }: { stage: Stage; language: Language }) {
             </span>
           </div>
           {index < steps.length - 1 && (
-            <div className={clsx("mx-2 h-px flex-1 sm:mx-4", index < current ? "bg-brand-500" : "bg-slate-200")} />
+            <div className={clsx("mx-2 h-px min-w-3 flex-1 sm:mx-4", index < current ? "bg-brand-500" : "bg-slate-200")} />
           )}
         </div>
       ))}
@@ -513,8 +513,8 @@ export default function PublicBooking() {
 
   if (stage === "confirmed" && confirmation) {
     return (
-      <div className="min-h-screen bg-white">
-        {!embedded && <header className="border-b border-slate-100 px-5 py-4">
+      <div className="min-h-screen overflow-x-hidden bg-white">
+        {!embedded && <header className="border-b border-slate-100 px-4 py-3 sm:px-5 sm:py-4">
           <div className="mx-auto flex max-w-5xl items-center justify-between">
             <Logo />
             <button className="secondary-button min-h-10 px-3 py-2" onClick={() => setLanguage(language === "en" ? "fr" : "en")}>
@@ -522,13 +522,13 @@ export default function PublicBooking() {
             </button>
           </div>
         </header>}
-        <main className="mx-auto max-w-2xl px-5 py-12 sm:py-20">
+        <main className="mx-auto max-w-2xl px-4 py-10 sm:px-5 sm:py-20">
           <div className="text-center">
             <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-emerald-50 text-emerald-600">
               <CheckCircle2 size={42} strokeWidth={2.2} />
             </div>
             <p className="eyebrow mt-7">{t.confirmed}</p>
-            <h1 className="mt-2 text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">{t.successTitle}</h1>
+            <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-ink sm:text-5xl">{t.successTitle}</h1>
             <p className="mx-auto mt-4 max-w-lg text-base leading-7 text-slate-600">{t.successText}</p>
           </div>
           <div className="card mt-9 overflow-hidden">
@@ -575,11 +575,11 @@ export default function PublicBooking() {
   }
 
   return (
-    <div className="min-h-screen">
-      {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur sm:px-6">
-        <div className="mx-auto flex max-w-6xl items-center justify-between">
+    <div className="min-h-screen overflow-x-hidden">
+      {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-3 py-3 backdrop-blur sm:px-6 sm:py-4">
+        <div className="mx-auto flex min-w-0 max-w-6xl items-center justify-between gap-3">
           <Logo />
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {config?.brand.supportPhone && (
               <a className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-ink sm:flex" href={`tel:${config.brand.supportPhone}`}>
                 <Phone size={16} /> {config.brand.supportPhone}
@@ -601,11 +601,11 @@ export default function PublicBooking() {
         </div>
       </header>}
 
-      <div className="border-b border-slate-200/80 bg-white px-4 py-5 sm:px-6">
+      <div className="border-b border-slate-200/80 bg-white px-3 py-4 sm:px-6 sm:py-5">
         <Progress stage={stage} language={language} />
       </div>
 
-      <main className="mx-auto max-w-6xl px-4 py-7 sm:px-6 sm:py-10">
+      <main className="mx-auto min-w-0 max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
         <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
           <section>
             {stage !== "center" && (
@@ -623,7 +623,7 @@ export default function PublicBooking() {
             {stage === "center" && (
               <div>
                 <p className="eyebrow">{t.book}</p>
-                <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{t.chooseLocation}</h1>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseLocation}</h1>
                 <p className="mt-3 flex items-center gap-2 text-sm font-medium text-slate-500">
                   <Star className="fill-amber-400 text-amber-400" size={16} /> {t.trust}
                 </p>
@@ -632,7 +632,7 @@ export default function PublicBooking() {
                     ? Array.from({ length: 3 }).map((_, index) => <div className="skeleton h-44 rounded-2xl" key={index} />)
                     : centers.map((item) => (
                         <button
-                          className="card group p-5 text-left transition hover:-translate-y-1 hover:border-brand-200 hover:shadow-soft"
+                          className="card group p-4 text-left transition hover:-translate-y-1 hover:border-brand-200 hover:shadow-soft sm:p-5"
                           onClick={() => chooseCenter(item)}
                           key={item.id}
                         >
@@ -653,13 +653,13 @@ export default function PublicBooking() {
             {stage === "service" && (
               <div>
                 <p className="eyebrow">{center?.name}</p>
-                <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{t.chooseService}</h1>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseService}</h1>
                 <div className="mt-7 grid gap-3 sm:grid-cols-2">
                   {loading
                     ? Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-44 rounded-2xl" key={index} />)
                     : services.map((item) => (
                         <button
-                          className="card group flex min-h-44 flex-col p-5 text-left transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-soft"
+                          className="card group flex min-h-44 flex-col p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-soft sm:p-5"
                           onClick={() => chooseService(item)}
                           key={item.id}
                         >
@@ -697,13 +697,13 @@ export default function PublicBooking() {
                         <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {t.live}
                       </span>
                     </div>
-                    <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{t.chooseTime}</h1>
+                    <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseTime}</h1>
                   </div>
                 </div>
                 <div className="card mt-6 p-4">
                   <MiniCalendar selected={date} onChange={setDate} language={language} />
                 </div>
-                <div className="card mt-5 p-5 sm:p-6">
+                <div className="card mt-5 p-4 sm:p-6">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-extrabold capitalize text-ink">{formatDateLong(date, language)}</p>
@@ -753,7 +753,7 @@ export default function PublicBooking() {
             {stage === "details" && (
               <div>
                 <p className="eyebrow">{t.secure}</p>
-                <h1 className="mt-2 text-3xl font-extrabold tracking-tight text-ink sm:text-4xl">{t.completeDetails}</h1>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.completeDetails}</h1>
                 {!form ? (
                   <div className="mt-7 space-y-4">
                     {Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-20 rounded-xl" key={index} />)}
@@ -802,7 +802,7 @@ export default function PublicBooking() {
           </div>
         </div>
       </main>
-      {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-5 py-6 text-center text-xs text-slate-500">
+      {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-4 py-6 text-center text-xs leading-5 text-slate-500">
         © {new Date().getFullYear()} Easy Driving School · Secure booking powered by Cloudflare
       </footer>}
     </div>

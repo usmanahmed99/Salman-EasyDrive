@@ -103,7 +103,7 @@ export default function ManageBooking() {
         </a>
       </header>
 
-      <main className="mx-auto max-w-lg px-4 py-10 sm:px-6">
+      <main className="mx-auto max-w-lg px-4 py-7 sm:px-6 sm:py-10">
         <h1 className="text-2xl font-extrabold text-ink">{t.title}</h1>
 
         {loading && (
@@ -121,7 +121,7 @@ export default function ManageBooking() {
         {!loading && booking && (
           <>
             {cancelled || isCancelled(booking.status) ? (
-              <div className="mt-8 card p-6 text-center">
+              <div className="mt-8 card p-5 text-center sm:p-6">
                 <CheckCircle2 className="mx-auto text-emerald-500" size={40} />
                 <h2 className="mt-4 text-lg font-extrabold text-ink">
                   {cancelled ? t.cancelledTitle : t.alreadyCancelled}
@@ -135,7 +135,7 @@ export default function ManageBooking() {
               <>
                 <div className="mt-6 card overflow-hidden">
                   <div className="grid grid-cols-1 gap-px bg-slate-100 sm:grid-cols-2">
-                    <div className="bg-white p-5">
+                    <div className="bg-white p-4 sm:p-5">
                       <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-400">
                         <Clock3 size={13} /> {t.schedule}
                       </p>
@@ -143,19 +143,19 @@ export default function ManageBooking() {
                         {format(new Date(booking.start_at), "EEE, MMM d")} · {format(new Date(booking.start_at), "h:mm a")}
                       </p>
                     </div>
-                    <div className="bg-white p-5">
+                    <div className="bg-white p-4 sm:p-5">
                       <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-400">
                         <CalendarCheck size={13} /> {t.service}
                       </p>
                       <p className="mt-1 font-bold text-ink">{serviceName}</p>
                     </div>
-                    <div className="bg-white p-5">
+                    <div className="bg-white p-4 sm:p-5">
                       <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-400">
                         <MapPin size={13} /> {t.location}
                       </p>
                       <p className="mt-1 font-bold text-ink">{booking.center_name}</p>
                     </div>
-                    <div className="bg-white p-5">
+                    <div className="bg-white p-4 sm:p-5">
                       <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{t.reference}</p>
                       <p className="mt-1 font-mono font-bold text-ink">{booking.reference}</p>
                     </div>
@@ -176,7 +176,7 @@ export default function ManageBooking() {
                     <XCircle size={16} /> {t.cancel}
                   </button>
                 ) : (
-                  <div className="mt-6 card border-red-100 p-5">
+                  <div className="mt-6 card border-red-100 p-4 sm:p-5">
                     <h3 className="font-extrabold text-ink">{t.confirmTitle}</h3>
                     <p className="mt-2 text-sm text-slate-500">{t.confirmBody}</p>
                     <div className="mt-4 flex flex-col gap-3 sm:flex-row">

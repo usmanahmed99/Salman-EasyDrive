@@ -15,20 +15,33 @@
 
 html {
   scroll-behavior: smooth;
+  max-width: 100%;
+  overflow-x: clip;
 }
 
 body {
   margin: 0;
+  width: 100%;
   min-width: 320px;
+  max-width: 100%;
   min-height: 100vh;
+  overflow-x: clip;
   font-family: "Open Sans", ui-sans-serif, system-ui, sans-serif;
   background:
     radial-gradient(circle at 8% 5%, rgba(240, 60, 2, 0.08), transparent 25rem),
     #f6f3f2;
 }
 
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100vh;
+  overflow-x: clip;
+}
+
 h1, h2, h3, h4, h5, h6 {
   font-family: "Mulish", "Muli", "Open Sans", ui-sans-serif, sans-serif;
+  overflow-wrap: anywhere;
 }
 
 button,
@@ -40,6 +53,7 @@ textarea {
 
 button {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .focus-ring {
@@ -47,7 +61,7 @@ button {
 }
 
 .field {
-  @apply focus-ring w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-ink shadow-sm transition placeholder:text-slate-400;
+  @apply focus-ring min-w-0 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-ink shadow-sm transition placeholder:text-slate-400;
 }
 
 .label {
@@ -167,6 +181,24 @@ button {
 
 .documentation input[type="checkbox"] {
   @apply mr-2 h-4 w-4 rounded border-slate-300 text-brand-600;
+}
+
+@media (max-width: 639px) {
+  .documentation {
+    @apply text-sm leading-6;
+  }
+
+  .documentation h1 {
+    @apply text-2xl;
+  }
+
+  .documentation h2 {
+    @apply mt-8 pt-6 text-xl;
+  }
+
+  .documentation table {
+    min-width: 540px;
+  }
 }
 
 @keyframes shimmer {
