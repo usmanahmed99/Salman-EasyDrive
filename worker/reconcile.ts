@@ -44,16 +44,32 @@ async function openCenters(env: Env, now: Date): Promise<OpenCenter[]> {
  * tear down any sibling resource events, and flag the reason so admins can see it in-app.
  *
  * Only runs for centers currently within their working hours; outside hours it exits cheaply.
+ *
+ * Scoping options:
+ * - `force`: ignore working-hours gating and reconcile all enabled centers (manual admin run).
+ * - `centerId`: reconcile only this one center (e.g. fired in the background on page load for the
+ *   center being viewed). Skips the open-hours scan entirely.
  */
 export async function reconcileCalendar(
   env: Env,
-  options: { force?: boolean } = {}
+  options: { force?: boolean; centerId?: string } = {}
 ): Promise<{ checked: number; cleaned: number; skipped: number }> {
   const now = new Date();
-  // Scheduled runs only touch centers within working hours; a manual run forces all centers.
-  const centers = options.force
-    ? (await env.DB.prepare("SELECT id, timezone FROM centers WHERE enabled = 1 AND deleted_at IS NULL").all<{ id: string; timezone: string }>()).results
-    : await openCenters(env, now);
+  // Scoped run: a single center, regardless of working hours.
+  // Forced run: all centers, regardless of working hours (manual admin trigger).
+  // Otherwise: only centers currently within their working hours (scheduled cron).
+  let centers: { id: string; timezone: string }[];
+  if (options.centerId) {
+    centers = (await env.DB.prepare(
+      "SELECT id, timezone FROM centers WHERE id = ? AND enabled = 1 AND deleted_at IS NULL"
+    ).bind(options.centerId).all<{ id: string; timezone: string }>()).results;
+  } else if (options.force) {
+    centers = (await env.DB.prepare(
+      "SELECT id, timezone FROM centers WHERE enabled = 1 AND deleted_at IS NULL"
+    ).all<{ id: string; timezone: string }>()).results;
+  } else {
+    centers = await openCenters(env, now);
+  }
   if (!centers.length) return { checked: 0, cleaned: 0, skipped: 0 };
 
   const centerIds = centers.map((c) => c.id);

@@ -340,7 +340,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
   throw new HttpError(405, "Method not allowed.");
 }
 
-async function route(request: Request, env: Env): Promise<Response> {
+async function route(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, "") || "/";
   const method = request.method;
@@ -414,6 +414,16 @@ async function route(request: Request, env: Env): Promise<Response> {
     await rateLimit(request, env, 120, 5);
     const payload = availabilityRequestSchema.parse(await readJson(request));
     const result = await getSlots(env, payload.centerSlug, payload.serviceSlug, payload.dateFrom, Boolean(payload.debug));
+    // Best-effort: reconcile this center's calendar in the background so externally-deleted
+    // Google events free their slots before the next load. Never blocks the response, and the
+    // booking lock re-checks availability at confirm time, so a slightly stale list is harmless.
+    if (result.center?.id) {
+      ctx.waitUntil(
+        reconcileCalendar(env, { centerId: result.center.id }).catch((error) =>
+          console.error("[reconcile] background availability run failed", error)
+        )
+      );
+    }
     return json({ slots: result.slots });
   }
   if (path === "/api/public/bookings" && method === "POST") {
@@ -869,9 +879,9 @@ export class BookingLock {
 }
 
 export default {
-  async fetch(request: Request, env: Env) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     try {
-      return withCors(await route(request, env), request, env);
+      return withCors(await route(request, env, ctx), request, env);
     } catch (error) {
       if (error instanceof HttpError) return withCors(json({ error: error.message, code: error.code }, error.status), request, env);
       if (error && typeof error === "object" && "issues" in error) {
