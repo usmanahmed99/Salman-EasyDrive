@@ -662,6 +662,7 @@ async function route(request: Request, env: Env): Promise<Response> {
           SELECT resource_groups.*, centers.name AS center_name,
             (SELECT COUNT(*) FROM resources WHERE resources.group_id = resource_groups.id AND resources.deleted_at IS NULL) AS member_count
           FROM resource_groups JOIN centers ON centers.id = resource_groups.center_id
+          WHERE centers.deleted_at IS NULL
           ORDER BY centers.name, resource_groups.type
         `).all();
         return json({ groups: results.results });
