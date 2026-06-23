@@ -42,13 +42,14 @@ function localize(value: { en: string; fr: string } | undefined, language: Langu
   return value?.[language] || value?.en || "";
 }
 
-// Builds the price label shown on the service card and booking summary, appending
-// a localized tax note ("Tax Incl." / "+ Tax") when the service opts into one.
-function priceLabel(service: Pick<Service, "priceDisplay" | "priceTaxMode">, t: typeof copy[Language]) {
-  if (!service.priceDisplay) return "";
-  if (service.priceTaxMode === "incl") return `${service.priceDisplay} ${t.taxIncl}`;
-  if (service.priceTaxMode === "plus") return `${service.priceDisplay} ${t.taxPlus}`;
-  return service.priceDisplay;
+// Splits the price into the display amount and a localized tax note ("Tax Incl." /
+// "+ Tax") so the note can be rendered smaller beside the price on the cards.
+function priceParts(service: Pick<Service, "priceDisplay" | "priceTaxMode">, t: typeof copy[Language]) {
+  const price = service.priceDisplay || "";
+  if (!price) return { price: "", note: "" };
+  if (service.priceTaxMode === "incl") return { price, note: t.taxIncl };
+  if (service.priceTaxMode === "plus") return { price, note: t.taxPlus };
+  return { price, note: "" };
 }
 
 function formatSlot(iso: string, language: Language) {
@@ -238,7 +239,14 @@ function ServiceSummary({
         <div className="relative">
           <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-200">{t.bookingSummary}</p>
           <h3 className="mt-3 text-xl font-bold">{service ? localize(service.name, language) : t.location}</h3>
-          {service?.priceDisplay && <p className="mt-1 text-2xl font-extrabold text-white">{priceLabel(service, t)}</p>}
+          {service?.priceDisplay && (() => {
+            const { price, note } = priceParts(service, t);
+            return (
+              <p className="mt-1 whitespace-nowrap text-2xl font-extrabold text-white">
+                {price}{note && <span className="ml-1.5">{note}</span>}
+              </p>
+            );
+          })()}
         </div>
       </div>
       <div className="space-y-4 p-5">
@@ -676,7 +684,14 @@ export default function PublicBooking() {
                             <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-50 text-brand-600">
                               <Gauge size={20} />
                             </div>
-                            {item.priceDisplay && <span className="rounded-lg bg-ink px-3 py-1.5 text-sm font-extrabold text-white">{priceLabel(item, t)}</span>}
+                            {item.priceDisplay && (() => {
+                              const { price, note } = priceParts(item, t);
+                              return (
+                                <span className="whitespace-nowrap rounded-lg bg-ink px-3 py-1.5 text-sm font-extrabold text-white">
+                                  {price}{note && <span className="ml-1">{note}</span>}
+                                </span>
+                              );
+                            })()}
                           </div>
                           <h2 className="mt-4 text-lg font-extrabold text-ink">{localize(item.name, language)}</h2>
                           <div className="flex-1">
