@@ -82,18 +82,34 @@ async function publicBookingByToken(request: Request, env: Env, reference: strin
 
 async function adminCrud(request: Request, env: Env, path: string, user: Awaited<ReturnType<typeof requireUser>>) {
   const method = request.method;
+  if (path === "/api/admin/centers/reorder" && method === "PUT") {
+    const body = await readJson(request) as { orderedIds?: unknown };
+    const orderedIds = Array.isArray(body.orderedIds) ? body.orderedIds.map(String) : [];
+    if (!orderedIds.length) throw new HttpError(400, "orderedIds is required.");
+    await env.DB.batch(
+      orderedIds.map((centerId, index) =>
+        env.DB.prepare("UPDATE centers SET sort_order=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL").bind(index, centerId)
+      )
+    );
+    await audit(env, user.id, "reorder", "center", "", { orderedIds }, request);
+    return json({ ok: true });
+  }
+
   if (path.startsWith("/api/admin/centers")) {
     const id = parseId(path, "/api/admin/centers");
     if (method === "GET") {
-      const results = await env.DB.prepare("SELECT * FROM centers WHERE deleted_at IS NULL ORDER BY name").all();
+      const results = await env.DB.prepare("SELECT * FROM centers WHERE deleted_at IS NULL ORDER BY sort_order, name").all();
       return json({ centers: results.results });
     }
     if (method === "POST") {
       const payload = centerMutationSchema.parse(await readJson(request));
       const nextId = uuid();
+      // New centers sort to the end of the current order until reordered.
+      const maxRow = await env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) AS max FROM centers WHERE deleted_at IS NULL").first<{ max: number }>();
+      const nextSortOrder = (maxRow?.max ?? -1) + 1;
       await env.DB.prepare(`
-        INSERT INTO centers(id, name, slug, address, timezone, enabled) VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(nextId, payload.name, payload.slug, payload.address || null, payload.timezone, Number(payload.enabled)).run();
+        INSERT INTO centers(id, name, slug, address, timezone, enabled, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, payload.name, payload.slug, payload.address || null, payload.timezone, Number(payload.enabled), nextSortOrder).run();
       await audit(env, user.id, "create", "center", nextId, payload, request);
       // Best-effort: auto-create a Google Calendar and link it as the canonical calendar for this center.
       const calId = await createCalendar(env, `Easy Driving - Center ${payload.name}`).catch((err: unknown) => {
@@ -371,7 +387,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
   if (path === "/api/public/centers" && method === "GET") {
     const results = await env.DB.prepare(`
       SELECT id, slug, name, address, timezone, enabled FROM centers
-      WHERE enabled=1 AND deleted_at IS NULL ORDER BY name
+      WHERE enabled=1 AND deleted_at IS NULL ORDER BY sort_order, name
     `).all<DbCenter>();
     return json(results.results.map((center) => ({ ...center, enabled: Boolean(center.enabled) })));
   }

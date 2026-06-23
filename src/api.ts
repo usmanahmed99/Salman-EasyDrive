@@ -154,6 +154,8 @@ export const adminApi = {
   updateCenter: (id: string, payload: Record<string, unknown>) =>
     request(`/api/admin/centers/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteCenter: (id: string) => request(`/api/admin/centers/${id}`, { method: "DELETE" }),
+  reorderCenters: (orderedIds: string[]) =>
+    request("/api/admin/centers/reorder", { method: "PUT", body: JSON.stringify({ orderedIds }) }),
 
   // Services
   services: () => request<{ services: Service[] }>("/api/admin/services"),

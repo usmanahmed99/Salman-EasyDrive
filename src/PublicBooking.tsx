@@ -673,10 +673,12 @@ export default function PublicBooking() {
                           <div className="flex-1">
                             <DescriptionMarkdown text={localize(item.description, language)} />
                           </div>
-                          <div className="mt-4 flex items-center justify-between text-xs">
-                            <span className="flex items-center gap-1.5 font-semibold text-slate-500">
-                              <Clock3 size={14} /> {item.durationMinutes} min
-                            </span>
+                          <div className={clsx("mt-4 flex items-center text-xs", item.showDuration !== false ? "justify-between" : "justify-end")}>
+                            {item.showDuration !== false && (
+                              <span className="flex items-center gap-1.5 font-semibold text-slate-500">
+                                <Clock3 size={14} /> {item.durationMinutes} min
+                              </span>
+                            )}
                             <span className="flex items-center gap-1 font-bold text-brand-600">
                               {t.continue} <ArrowRight size={14} />
                             </span>

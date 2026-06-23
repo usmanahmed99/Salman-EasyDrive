@@ -28,6 +28,7 @@ export interface DbCenter {
   address: string | null;
   timezone: string;
   enabled: number;
+  sort_order: number;
 }
 
 export interface DbService {

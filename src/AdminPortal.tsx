@@ -1191,6 +1191,37 @@ function CentersScreen({ centers, bookings, groups, resources, reload, toast }: 
   const today = montrealToday();
   const { confirm, dialog } = useConfirm();
 
+  // Local copy of the center order so drag-and-drop feels instant; we persist on
+  // drop and reload from the server (which is the source of truth) afterwards.
+  const [ordered, setOrdered] = useState<Center[]>(centers);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  useEffect(() => { setOrdered(centers); }, [centers]);
+
+  const handleDrop = async (targetId: string) => {
+    const sourceId = dragId;
+    setDragId(null);
+    if (!sourceId || sourceId === targetId) return;
+    const from = ordered.findIndex((c) => c.id === sourceId);
+    const to = ordered.findIndex((c) => c.id === targetId);
+    if (from === -1 || to === -1) return;
+    const next = [...ordered];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setOrdered(next);
+    setSavingOrder(true);
+    try {
+      await adminApi.reorderCenters(next.map((c) => c.id));
+      toast.show("success", "Center order updated.");
+      reload();
+    } catch (err) {
+      setOrdered(centers); // revert to last known server order
+      toast.show("error", errorMessage(err));
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
   const remove = async (center: Center) => {
     if (!await confirm(`Delete ${center.name}? This cannot be undone.`)) return;
     try {
@@ -1204,16 +1235,34 @@ function CentersScreen({ centers, bookings, groups, resources, reload, toast }: 
 
   return (
     <>
+      <p className="mb-4 text-sm text-slate-500">Drag to reorder · This is the order centers appear to learners when booking.</p>
       <div className="grid gap-4 lg:grid-cols-3">
-        {centers.map((center) => {
+        {ordered.map((center) => {
           const todays = bookings.filter((booking) => booking.center === center.name && bookingDate(booking) === today).length;
           const centerGroups = groups.filter((group) => group.center_id === center.id);
           const instructorCount = resources.filter((r) => r.type === "instructor" && centerGroups.some((g) => g.id === r.group_id)).length;
           const carCapacity = centerGroups.filter((g) => g.type === "cars").reduce((sum, g) => sum + g.capacity, 0);
           return (
-            <div className="card p-5" key={center.id}>
+            <div
+              className={clsx("card p-5 transition", dragId === center.id && "opacity-40", savingOrder && "pointer-events-none")}
+              key={center.id}
+              draggable
+              onDragStart={() => setDragId(center.id)}
+              onDragEnd={() => setDragId(null)}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => handleDrop(center.id)}
+            >
               <div className="flex items-start justify-between">
-                <div className="grid h-11 w-11 place-items-center rounded-xl bg-brand-50 text-brand-600"><MapPin size={21} /></div>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="hidden shrink-0 cursor-grab touch-none text-slate-300 hover:text-slate-500 active:cursor-grabbing sm:grid sm:place-items-center"
+                    aria-label={`Reorder ${center.name}`}
+                    title="Drag to reorder"
+                  >
+                    <GripVertical size={18} />
+                  </button>
+                  <div className="grid h-11 w-11 place-items-center rounded-xl bg-brand-50 text-brand-600"><MapPin size={21} /></div>
+                </div>
                 <span className={clsx("rounded-full px-2.5 py-1 text-[11px] font-bold", center.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{center.enabled ? "Open" : "Closed"}</span>
               </div>
               <h3 className="mt-4 text-lg font-extrabold text-ink">{center.name}</h3>

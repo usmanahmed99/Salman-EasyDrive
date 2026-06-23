@@ -239,6 +239,10 @@ Each center controls public name, address, timezone, business hours, enabled ser
 
 Open the center and go to **Availability rules** → select the center → set the days and times the center accepts bookings. Hours must be set for each weekday separately. Days with no hours enabled will show no slots on the public booking page.
 
+### Ordering centers
+
+Drag a center card by the grip handle (top-left of each card) to reorder the list. The order you set is saved immediately and is the **same order students see** when choosing a center on the public booking page — so put your most common or highest-priority centers first. Newly added centers appear at the end until you move them.
+
 ### Disable versus delete
 
 - **Disable** a center when it may return later. Existing bookings are unaffected.
