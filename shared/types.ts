@@ -24,6 +24,7 @@ export interface Service {
   bufferAfterMinutes: number;
   slotIntervalMinutes: number;
   priceDisplay?: string;
+  priceTaxMode: "none" | "incl" | "plus";
   enabled: boolean;
   requestOnly?: boolean;
   formId?: string;

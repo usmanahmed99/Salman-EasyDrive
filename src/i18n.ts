@@ -37,7 +37,9 @@ export const copy = {
     select: "Select an option",
     trust: "Trusted by 1,100+ students since 2015",
     live: "Live availability",
-    requestOnly: "Request only"
+    requestOnly: "Request only",
+    taxIncl: "Tax Incl.",
+    taxPlus: "+ Tax"
   },
   fr: {
     book: "Réserver",
@@ -75,7 +77,9 @@ export const copy = {
     select: "Choisir une option",
     trust: "La confiance de plus de 1 100 élèves depuis 2015",
     live: "Disponibilités en direct",
-    requestOnly: "Sur demande"
+    requestOnly: "Sur demande",
+    taxIncl: "Taxes incluses",
+    taxPlus: "+ Taxes"
   }
 } as const;
 

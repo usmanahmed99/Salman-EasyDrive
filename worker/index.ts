@@ -201,6 +201,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       bufferAfter: Number(body.bufferAfterMinutes || 0),
       slotInterval: Number(body.slotIntervalMinutes || 30),
       price: body.priceDisplay ? String(body.priceDisplay) : null,
+      priceTaxMode: (body.priceTaxMode === "incl" || body.priceTaxMode === "plus") ? body.priceTaxMode : "none",
       formId: String(body.formId || "form_lesson"),
       cutoff: Number(body.cutoffHours || 0),
       cancellationCutoff: body.cancellationCutoffHours == null ? null : Number(body.cancellationCutoffHours),
@@ -217,10 +218,10 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare(`
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
-          buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display,
+          buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display, price_tax_mode,
           form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, nextSortOrder).run();
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, nextSortOrder).run();
       // Offer the new service at every existing center by default (mirrors center creation).
       const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
       for (const ctr of allCenters.results) {
@@ -234,9 +235,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare(`
         UPDATE services SET name_en=?, name_fr=?, description_en=?, description_fr=?,
         duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
-        price_display=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
+        price_display=?, price_tax_mode=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, id).run();
+      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }

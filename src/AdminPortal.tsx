@@ -1316,6 +1316,7 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
     bufferAfterMinutes: service?.bufferAfterMinutes ?? 10,
     slotIntervalMinutes: service?.slotIntervalMinutes ?? 30,
     priceDisplay: service?.priceDisplay || "",
+    priceTaxMode: service?.priceTaxMode || "none",
     formId: service?.formId || forms[0]?.id || "form_lesson",
     cutoffHours: service?.cutoffHours ?? 2,
     cancellationCutoffHours: service?.cancellationCutoffHours ?? 12,
@@ -1381,6 +1382,13 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
           ? <ReadonlySlug label="Slug (URL) · locked" value={v.slug} />
           : <Field label="Slug (URL)"><input className="field" value={v.slug} onChange={(event) => set("slug", slugify(event.target.value))} /></Field>}
         <Field label="Price (display)"><input className="field" value={v.priceDisplay} onChange={(event) => set("priceDisplay", event.target.value)} placeholder="$80" /></Field>
+        <Field label="Tax note on price">
+          <select className="field" value={v.priceTaxMode} onChange={(event) => set("priceTaxMode", event.target.value)}>
+            <option value="none">No tax note</option>
+            <option value="incl">Tax included</option>
+            <option value="plus">Plus tax</option>
+          </select>
+        </Field>
         <Field label="Duration (minutes)"><input className="field" type="number" value={v.durationMinutes} onChange={(event) => set("durationMinutes", Number(event.target.value))} /></Field>
         <Field label="Booking form">
           <select className="field" value={v.formId} onChange={(event) => set("formId", event.target.value)}>
@@ -2384,7 +2392,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
             <p className="mt-1 text-xs text-slate-500">
               Customize the title and description of created calendar events (and the student's invite email).
               Leave a field blank to use the built-in default. Placeholders:
-              <span className="font-mono"> {"{service} {serviceDescription} {center} {reference} {student} {price} {manageUrl} {visibleFields}"}</span>
+              <span className="font-mono"> {"{service} {serviceDescription} {center} {reference} {student} {price} {duration} {manageUrl} {visibleFields}"}</span>
             </p>
           </div>
           <div className="space-y-4 p-5">

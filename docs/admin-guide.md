@@ -441,7 +441,8 @@ Customize the title and description of booking events using placeholders:
 | `{center}` | Center name |
 | `{reference}` | Booking reference, e.g. ED-251002 |
 | `{student}` | Student name |
-| `{price}` | Service display price |
+| `{price}` | Service display price, including its tax note ("Tax Incl." / "+ Tax") when set |
+| `{duration}` | Service duration, e.g. "60 min" — empty when "Show duration" is off for the service |
 | `{manageUrl}` | Unique manage/cancel link for the student |
 | `{visibleFields}` | Form fields marked "Show on Calendar event" |
 
@@ -452,6 +453,7 @@ Example description template:
 ```
 Booking reference: {reference}
 Service: {service} — {price}
+Duration: {duration}
 Center: {center}
 {visibleFields}
 

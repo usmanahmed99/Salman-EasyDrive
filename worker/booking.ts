@@ -12,8 +12,17 @@ interface TemplateFields {
   reference: string;
   student: string;
   price: string;
+  duration: string;
   manageUrl: string;
   visibleFields: string;
+}
+
+// Tax note appended to the price token, matching the public booking labels.
+// QC French uses "Taxes incluses" / "+ Taxes".
+function taxNote(mode: string | undefined, isFr: boolean) {
+  if (mode === "incl") return isFr ? "Taxes incluses" : "Tax Incl.";
+  if (mode === "plus") return isFr ? "+ Taxes" : "+ Tax";
+  return "";
 }
 
 // Replaces {placeholder} tokens; unknown placeholders are left untouched so a
@@ -420,6 +429,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   const booking = await env.DB.prepare(`
     SELECT bookings.*, centers.name AS center_name, services.name_en, services.name_fr,
       services.description_en, services.description_fr, services.price_display,
+      services.price_tax_mode, services.show_duration, services.duration_minutes,
       booking_form_responses.response_json, booking_form_responses.student_name,
       booking_form_responses.student_email
     FROM bookings
@@ -459,13 +469,26 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     .filter((field) => field.calendarVisible && answers[field.key])
     .map((field) => `${field.label.fr || field.label.en}: ${String(answers[field.key])}`);
 
+  // Price carries the same tax note shown on the public service cards.
+  const note = taxNote(booking.price_tax_mode, isFr);
+  const priceLabel = booking.price_display
+    ? (note ? `${booking.price_display} ${note}` : booking.price_display)
+    : "";
+  // Duration follows the per-service "show duration" toggle: when the admin hid it
+  // on the service card, it is omitted from the invitation too.
+  const showDuration = String(booking.show_duration) !== "0";
+  const durationLabel = showDuration && booking.duration_minutes
+    ? `${booking.duration_minutes} min`
+    : "";
+
   const fields: TemplateFields = {
     service: isFr ? (booking.name_fr || booking.name_en) : booking.name_en,
     serviceDescription: isFr ? (booking.description_fr || booking.description_en || "") : (booking.description_en || ""),
     center: booking.center_name,
     reference: booking.reference,
     student: booking.student_name || "Private",
-    price: booking.price_display || "",
+    price: priceLabel,
+    duration: durationLabel,
     manageUrl,
     visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n")
   };
@@ -476,6 +499,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     `Booking reference: ${fields.reference}`,
     `Student: ${fields.student}`,
     `Service: ${fields.service}`,
+    fields.duration ? `Duration: ${fields.duration}` : "",
+    fields.price ? `Price: ${fields.price}` : "",
     `Center: ${fields.center}`,
     fields.visibleFields,
     manageUrl ? `Manage or cancel: ${manageUrl}` : ""
@@ -592,6 +617,7 @@ export function serviceResponse(service: {
   cancellation_cutoff_hours: number | null;
   show_duration: number;
   sort_order?: number;
+  price_tax_mode?: string;
 }) {
   return {
     id: service.id,
@@ -603,6 +629,7 @@ export function serviceResponse(service: {
     bufferAfterMinutes: service.buffer_after_minutes,
     slotIntervalMinutes: service.slot_interval_minutes ?? 30,
     priceDisplay: service.price_display || undefined,
+    priceTaxMode: (service.price_tax_mode === "incl" || service.price_tax_mode === "plus") ? service.price_tax_mode : "none",
     enabled: Boolean(service.enabled),
     requestOnly: Boolean(service.request_only),
     formId: service.form_id,
