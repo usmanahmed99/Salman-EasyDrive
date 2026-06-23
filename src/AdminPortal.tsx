@@ -1378,9 +1378,11 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
         <Field label="Name (French)"><input className="field" value={v.nameFr} onChange={(event) => set("nameFr", event.target.value)} /></Field>
         <label className="block sm:col-span-2"><span className="label">Description (English)</span><textarea className="field" rows={2} value={v.descriptionEn} onChange={(event) => set("descriptionEn", event.target.value)} /></label>
         <label className="block sm:col-span-2"><span className="label">Description (French)</span><textarea className="field" rows={2} value={v.descriptionFr} onChange={(event) => set("descriptionFr", event.target.value)} /></label>
-        {service
-          ? <ReadonlySlug label="Slug (URL) · locked" value={v.slug} />
-          : <Field label="Slug (URL)"><input className="field" value={v.slug} onChange={(event) => set("slug", slugify(event.target.value))} /></Field>}
+        <div className="sm:col-span-2">
+          {service
+            ? <ReadonlySlug label="Slug (URL) · locked" value={v.slug} />
+            : <Field label="Slug (URL)"><input className="field" value={v.slug} onChange={(event) => set("slug", slugify(event.target.value))} /></Field>}
+        </div>
         <Field label="Price (display)"><input className="field" value={v.priceDisplay} onChange={(event) => set("priceDisplay", event.target.value)} placeholder="$80" /></Field>
         <Field label="Tax note on price">
           <select className="field" value={v.priceTaxMode} onChange={(event) => set("priceTaxMode", event.target.value)}>
