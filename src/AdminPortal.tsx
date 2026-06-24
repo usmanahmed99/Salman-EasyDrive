@@ -1134,7 +1134,7 @@ function slugify(value: string) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-function CenterModal({ center, onClose, onSaved }: { center: Center | null; onClose: () => void; onSaved: () => void }) {
+function CenterModal({ center, onClose, onSaved, reload }: { center: Center | null; onClose: () => void; onSaved: () => void; reload: () => void }) {
   const [name, setName] = useState(center?.name || "");
   const [slug, setSlug] = useState(center?.slug || "");
   const [address, setAddress] = useState(center?.address || "");
@@ -1142,6 +1142,27 @@ function CenterModal({ center, onClose, onSaved }: { center: Center | null; onCl
   const [enabled, setEnabled] = useState(center?.enabled ?? true);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [creatingCal, setCreatingCal] = useState(false);
+  const [newCalendarId, setNewCalendarId] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
+
+  // Create a brand-new canonical Google Calendar for this center (replaces the canonical mapping;
+  // the old Google calendar is left intact). Keeps the modal open to show the new id.
+  const createCal = async () => {
+    if (!center) return;
+    if (!(await confirm("Create a brand-new Google Calendar for this center? It becomes the canonical calendar; the previous one is left intact in Google and must be removed manually if no longer needed."))) return;
+    setError("");
+    setCreatingCal(true);
+    try {
+      const res = await adminApi.createCenterCalendar(center.id);
+      setNewCalendarId(res.calendarId);
+      reload();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setCreatingCal(false);
+    }
+  };
 
   const save = async () => {
     setError("");
@@ -1181,7 +1202,20 @@ function CenterModal({ center, onClose, onSaved }: { center: Center | null; onCl
             <option value="0">Closed / disabled</option>
           </select>
         </Field>
+        {center && (
+          <div className="sm:col-span-2 space-y-1.5 border-t border-slate-100 pt-4">
+            <span className="label">Google Calendar (canonical)</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" className="secondary-button text-xs" disabled={creatingCal} onClick={createCal}>
+                {creatingCal ? <LoaderCircle className="animate-spin" size={14} /> : <Link2 size={14} />} Create new Google Calendar
+              </button>
+              {newCalendarId && <CopyCalendarButton calendarId={newCalendarId} inline />}
+            </div>
+            {newCalendarId && <p className="truncate rounded-lg bg-slate-50 p-2 font-mono text-[11px] text-slate-600">{newCalendarId}</p>}
+          </div>
+        )}
       </div>
+      {dialog}
     </Modal>
   );
 }
@@ -1283,7 +1317,7 @@ function CentersScreen({ centers, bookings, groups, resources, reload, toast }: 
           <span className="text-center"><Plus className="mx-auto" size={24} /><span className="mt-2 block text-sm font-bold">Add center</span></span>
         </button>
       </div>
-      {editing && <CenterModal center={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Center saved."); reload(); }} />}
+      {editing && <CenterModal center={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Center saved."); reload(); }} reload={reload} />}
       {dialog}
     </>
   );
@@ -1635,7 +1669,7 @@ function CopyCalendarButton({ calendarId, inline }: { calendarId: string; inline
   );
 }
 
-function InstructorModal({ resource, groups, onClose, onSaved }: { resource: AdminResource | null; groups: ResourceGroup[]; onClose: () => void; onSaved: () => void }) {
+function InstructorModal({ resource, groups, onClose, onSaved, reload }: { resource: AdminResource | null; groups: ResourceGroup[]; onClose: () => void; onSaved: () => void; reload: () => void }) {
   const instructorGroups = groups.filter((group) => group.type === "instructors");
   const [v, setV] = useState({
     name: resource?.name || "",
@@ -1648,7 +1682,27 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
   });
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [creatingCal, setCreatingCal] = useState(false);
+  const { confirm, dialog } = useConfirm();
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
+
+  // Create a brand-new Google Calendar for this existing instructor (keeps the modal open so the
+  // admin can see/copy the new id). The old calendar, if any, is left intact in Google.
+  const createCal = async () => {
+    if (!resource) return;
+    if (v.calendarId && !(await confirm("Create a brand-new Google Calendar? The current one is left intact in Google and must be removed manually if no longer needed."))) return;
+    setError("");
+    setCreatingCal(true);
+    try {
+      const res = await adminApi.createResourceCalendar(resource.id);
+      set("calendarId", res.calendarId);
+      reload();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setCreatingCal(false);
+    }
+  };
 
   const save = async () => {
     setError("");
@@ -1690,7 +1744,15 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
         <Field label="Phone"><input className="field" value={v.phone} onChange={(event) => set("phone", event.target.value)} /></Field>
         <div className="sm:col-span-2 space-y-1.5">
           <label className="block"><span className="label">Google Calendar ID</span><input className="field font-mono text-xs" value={v.calendarId} onChange={(event) => set("calendarId", event.target.value)} placeholder="instructor@group.calendar.google.com" /></label>
-          {v.calendarId && <CopyCalendarButton calendarId={v.calendarId} inline />}
+          <div className="flex flex-wrap items-center gap-2">
+            {v.calendarId && <CopyCalendarButton calendarId={v.calendarId} inline />}
+            {resource && (
+              <button type="button" className="secondary-button text-xs" disabled={creatingCal} onClick={createCal}>
+                {creatingCal ? <LoaderCircle className="animate-spin" size={14} /> : <Link2 size={14} />}
+                {v.calendarId ? "Replace with a new Google Calendar" : "Create new Google Calendar"}
+              </button>
+            )}
+          </div>
         </div>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
@@ -1699,6 +1761,7 @@ function InstructorModal({ resource, groups, onClose, onSaved }: { resource: Adm
           </select>
         </Field>
       </div>
+      {dialog}
     </Modal>
   );
 }
@@ -1822,7 +1885,7 @@ function ResourcesScreen({ resources, groups, centers, reload, toast }: { resour
           ))}
         </div>
       </section>
-      {editing && <InstructorModal resource={editing === "new" ? null : editing} groups={groups} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Instructor saved."); reload(); }} />}
+      {editing && <InstructorModal resource={editing === "new" ? null : editing} groups={groups} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); toast.show("success", "Instructor saved."); reload(); }} reload={reload} />}
       {dialog}
     </div>
   );
@@ -2455,9 +2518,25 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
 }) {
   const named = resources.filter((r) => r.type === "instructor" || r.type === "vehicle");
   const [saving, setSaving] = useState<string | null>(null);
+  const [creatingCal, setCreatingCal] = useState<string | null>(null);
   const [selections, setSelections] = useState<Record<string, string>>(() =>
     Object.fromEntries(named.map((r) => [r.id, r.calendar_id || ""]))
   );
+
+  // Create a brand-new Google Calendar for this resource (old one, if any, left intact in Google).
+  const createCal = async (resource: AdminResource) => {
+    setCreatingCal(resource.id);
+    try {
+      const res = await adminApi.createResourceCalendar(resource.id);
+      setSelections((prev) => ({ ...prev, [resource.id]: res.calendarId }));
+      toast.show("success", `New calendar created for ${resource.name}.`);
+      reload();
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setCreatingCal(null);
+    }
+  };
 
   const save = async (resource: AdminResource) => {
     setSaving(resource.id);
@@ -2503,15 +2582,25 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
                 <p className="mt-1 truncate font-mono text-xs text-slate-400">{resource.calendar_id || "No calendar set — load calendars above to assign"}</p>
               )}
             </div>
-            {available && (
+            <div className="flex shrink-0 gap-2">
               <button
-                className="primary-button min-h-10 w-full shrink-0 px-3 py-1.5 text-xs sm:w-auto"
-                disabled={saving === resource.id}
-                onClick={() => save(resource)}
+                className="secondary-button min-h-10 px-3 py-1.5 text-xs"
+                disabled={creatingCal === resource.id}
+                onClick={() => createCal(resource)}
+                title="Create a brand-new Google Calendar for this resource"
               >
-                {saving === resource.id ? <LoaderCircle className="animate-spin" size={14} /> : "Save"}
+                {creatingCal === resource.id ? <LoaderCircle className="animate-spin" size={14} /> : <Link2 size={14} />} Create new
               </button>
-            )}
+              {available && (
+                <button
+                  className="primary-button min-h-10 px-3 py-1.5 text-xs"
+                  disabled={saving === resource.id}
+                  onClick={() => save(resource)}
+                >
+                  {saving === resource.id ? <LoaderCircle className="animate-spin" size={14} /> : "Save"}
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
