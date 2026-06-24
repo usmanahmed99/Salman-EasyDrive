@@ -96,6 +96,20 @@ Google refresh tokens are AES-GCM encrypted before D1 storage with a key derived
 
 ## Deploy to Cloudflare
 
+### CI/CD: dev and prod branches
+
+Deploys are automated by branch via two GitHub Actions workflows:
+
+| Push to | Workflow | Wrangler env | Target | GitHub Environment |
+| --- | --- | --- | --- | --- |
+| `dev` | `.github/workflows/deploy-dev.yml` | default | `easydriving.nextiadriveops.com` | `development` |
+| `master` | `.github/workflows/deploy-prod.yml` | `--env production` | `book.easydriving.ca` (client account) | `production` |
+
+Each GitHub Environment holds its own `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (dev and
+prod are separate Cloudflare accounts). Work on `dev` → auto-deploys dev; merge `dev` → `master`
+→ auto-deploys prod (after the `production` environment's approval gate, if a reviewer is set).
+Prod-specific config lives under `[env.production]` in `wrangler.toml`.
+
 A copy-paste quickstart. For the full walkthrough (consent screen, custom domain, monitoring,
 backup, pre-launch checklist) see [`docs/technical-setup.md`](docs/technical-setup.md) §10–16.
 For the live launch at `easydriving.nextiadriveops.com`, follow the domain-specific guide:
