@@ -1,13 +1,16 @@
-name: Deploy
+name: Deploy Dev
 
 on:
   push:
-    branches: [master]
+    branches: [dev]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy Worker + Pages
+    name: Deploy Worker + Pages (dev)
+    # Dev environment holds the CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID
+    # secrets for the existing (non-client) Cloudflare account.
+    environment: development
     steps:
       - uses: actions/checkout@v4
 
@@ -22,6 +25,7 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      # Default (top-level) wrangler env — easydriving.nextiadriveops.com.
       - name: Deploy Worker
         run: npx wrangler deploy
         env:

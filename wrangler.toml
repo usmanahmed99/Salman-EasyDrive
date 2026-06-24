@@ -31,3 +31,40 @@ PUBLIC_SITE_ORIGIN = "https://easydriving.nextiadriveops.com,https://easydriving
 GOOGLE_REDIRECT_URI = "https://easydriving.nextiadriveops.com/api/auth/google/callback"
 DEFAULT_TIMEZONE = "America/Montreal"
 ADMIN_EMAILS = "easydrivingca@gmail.com,monsieur.usman.ahmed@gmail.com"
+
+# ---- Production (client-owned account, book.easydriving.ca) ----
+# Deploy with: wrangler deploy --env production
+# Named environments need their own copy of every binding, so D1 / DO / triggers /
+# vars are repeated below. The zone easydriving.ca must be active in the client
+# account for the route to resolve.
+[env.production]
+workers_dev = false
+routes = [
+  { pattern = "book.easydriving.ca/api/*", zone_name = "easydriving.ca" }
+]
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "easy-driving-booking"
+# Replace with the database_id returned by `wrangler d1 create` in the client account.
+database_id = "REPLACE_WITH_PROD_D1_ID"
+migrations_dir = "migrations"
+
+[[env.production.durable_objects.bindings]]
+name = "BOOKING_LOCK"
+class_name = "BookingLock"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["BookingLock"]
+
+[env.production.triggers]
+crons = ["*/30 * * * *"]
+
+[env.production.vars]
+APP_BASE_URL = "https://book.easydriving.ca"
+# Add marketing origins (e.g. https://easydriving.ca) here if the booking widget is embedded elsewhere.
+PUBLIC_SITE_ORIGIN = "https://book.easydriving.ca"
+GOOGLE_REDIRECT_URI = "https://book.easydriving.ca/api/auth/google/callback"
+DEFAULT_TIMEZONE = "America/Montreal"
+ADMIN_EMAILS = "easydrivingca@gmail.com,monsieur.usman.ahmed@gmail.com"
