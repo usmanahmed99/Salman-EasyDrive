@@ -32,6 +32,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Unlink,
   UserRound,
   UsersRound,
   X
@@ -1683,6 +1684,7 @@ function InstructorModal({ resource, groups, onClose, onSaved, reload }: { resou
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [creatingCal, setCreatingCal] = useState(false);
+  const [calBusy, setCalBusy] = useState(false);
   const { confirm, dialog } = useConfirm();
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
 
@@ -1701,6 +1703,26 @@ function InstructorModal({ resource, groups, onClose, onSaved, reload }: { resou
       setError(errorMessage(err));
     } finally {
       setCreatingCal(false);
+    }
+  };
+
+  // Unlink clears the app reference only; delete-from-Google permanently removes the calendar + events.
+  const removeCal = async (mode: "unlink" | "google") => {
+    if (!resource) return;
+    const msg = mode === "google"
+      ? "Permanently DELETE this Google Calendar and all its events? This cannot be undone."
+      : "Unlink this calendar from the instructor? The Google Calendar itself is kept.";
+    if (!(await confirm(msg))) return;
+    setError("");
+    setCalBusy(true);
+    try {
+      await adminApi.deleteResourceCalendar(resource.id, mode);
+      set("calendarId", "");
+      reload();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setCalBusy(false);
     }
   };
 
@@ -1747,10 +1769,20 @@ function InstructorModal({ resource, groups, onClose, onSaved, reload }: { resou
           <div className="flex flex-wrap items-center gap-2">
             {v.calendarId && <CopyCalendarButton calendarId={v.calendarId} inline />}
             {resource && (
-              <button type="button" className="secondary-button text-xs" disabled={creatingCal} onClick={createCal}>
+              <button type="button" className="secondary-button text-xs" disabled={creatingCal || calBusy} onClick={createCal}>
                 {creatingCal ? <LoaderCircle className="animate-spin" size={14} /> : <Link2 size={14} />}
                 {v.calendarId ? "Replace with a new Google Calendar" : "Create new Google Calendar"}
               </button>
+            )}
+            {resource && v.calendarId && (
+              <>
+                <button type="button" className="secondary-button text-xs" disabled={creatingCal || calBusy} onClick={() => removeCal("unlink")}>
+                  {calBusy ? <LoaderCircle className="animate-spin" size={14} /> : <Unlink size={14} />} Unlink
+                </button>
+                <button type="button" className="secondary-button text-xs text-red-600 hover:bg-red-50" disabled={creatingCal || calBusy} onClick={() => removeCal("google")}>
+                  <Trash2 size={14} /> Delete from Google
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -2307,6 +2339,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
   const [mappingId, setMappingId] = useState(centers[0]?.id || "");
   const [calendarId, setCalendarId] = useState("");
   const [saving, setSaving] = useState(false);
+  const { confirm, dialog } = useConfirm();
   const connection = connections[0];
 
   const [titleTemplate, setTitleTemplate] = useState("");
@@ -2387,6 +2420,18 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
     }
   };
 
+  // Permanently delete a center's canonical Google Calendar (and its events), then unlink it.
+  const deleteCenterCalFromGoogle = async (centerId: string) => {
+    if (!(await confirm("Permanently DELETE this center's Google Calendar and all its events? This cannot be undone."))) return;
+    try {
+      await adminApi.deleteCenterCalendar(centerId, "google");
+      toast.show("success", "Calendar deleted from Google.");
+      reload();
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    }
+  };
+
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
       <div className="space-y-6">
@@ -2416,15 +2461,23 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
           <div className="border-b border-slate-100 p-5"><h2 className="font-extrabold text-ink">Canonical mappings</h2><p className="mt-1 text-xs text-slate-500">Each center or service needs one canonical calendar for student-facing events.</p></div>
           <div className="divide-y divide-slate-100">
             {mappings.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-400">No mappings yet. Add one below.</p>}
-            {mappings.map((mapping) => (
+            {mappings.map((mapping) => {
+              const centerId = mapping.center_id;
+              return (
               <div className="flex items-center gap-3 px-5 py-4" key={mapping.id}>
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-bold text-ink">{mapping.center_name || mapping.service_name || mapping.mapping_id} <span className="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">{mapping.mapping_type}</span></p>
                   <p className="mt-1 truncate font-mono text-xs text-slate-400">{mapping.calendar_id}</p>
                 </div>
-                <button className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => removeMapping(mapping.id)}><Trash2 size={16} /></button>
+                <div className="flex shrink-0 gap-1">
+                  <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600" title="Unlink (keep the Google calendar)" onClick={() => removeMapping(mapping.id)}><Unlink size={16} /></button>
+                  {mapping.mapping_type === "center" && centerId && (
+                    <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" title="Delete this calendar from Google (permanent)" onClick={() => deleteCenterCalFromGoogle(centerId)}><Trash2 size={16} /></button>
+                  )}
+                </div>
               </div>
-            ))}
+              );
+            })}
           </div>
           <div className="border-t border-slate-100 bg-slate-50/60 p-5">
             <p className="mb-3 text-xs font-bold uppercase tracking-wider text-slate-400">Add mapping</p>
@@ -2506,6 +2559,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
           {["No instructor dashboard required", "Live conflict checks", "Student invite from one canonical event"].map((item) => <p className="flex items-center gap-2" key={item}><Check className="text-emerald-400" size={15} /> {item}</p>)}
         </div>
       </div>
+      {dialog}
     </div>
   );
 }
@@ -2519,6 +2573,8 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
   const named = resources.filter((r) => r.type === "instructor" || r.type === "vehicle");
   const [saving, setSaving] = useState<string | null>(null);
   const [creatingCal, setCreatingCal] = useState<string | null>(null);
+  const [removing, setRemoving] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirm();
   const [selections, setSelections] = useState<Record<string, string>>(() =>
     Object.fromEntries(named.map((r) => [r.id, r.calendar_id || ""]))
   );
@@ -2535,6 +2591,25 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
       toast.show("error", errorMessage(err));
     } finally {
       setCreatingCal(null);
+    }
+  };
+
+  // Unlink (keep the Google calendar) or permanently delete it from Google.
+  const removeCal = async (resource: AdminResource, mode: "unlink" | "google") => {
+    const msg = mode === "google"
+      ? `Permanently DELETE ${resource.name}'s Google Calendar and all its events? This cannot be undone.`
+      : `Unlink the calendar from ${resource.name}? The Google Calendar itself is kept.`;
+    if (!(await confirm(msg))) return;
+    setRemoving(resource.id);
+    try {
+      await adminApi.deleteResourceCalendar(resource.id, mode);
+      setSelections((prev) => ({ ...prev, [resource.id]: "" }));
+      toast.show("success", mode === "google" ? "Calendar deleted from Google." : "Calendar unlinked.");
+      reload();
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setRemoving(null);
     }
   };
 
@@ -2582,15 +2657,35 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
                 <p className="mt-1 truncate font-mono text-xs text-slate-400">{resource.calendar_id || "No calendar set — load calendars above to assign"}</p>
               )}
             </div>
-            <div className="flex shrink-0 gap-2">
+            <div className="flex shrink-0 flex-wrap gap-2">
               <button
                 className="secondary-button min-h-10 px-3 py-1.5 text-xs"
-                disabled={creatingCal === resource.id}
+                disabled={creatingCal === resource.id || removing === resource.id}
                 onClick={() => createCal(resource)}
                 title="Create a brand-new Google Calendar for this resource"
               >
                 {creatingCal === resource.id ? <LoaderCircle className="animate-spin" size={14} /> : <Link2 size={14} />} Create new
               </button>
+              {resource.calendar_id && (
+                <>
+                  <button
+                    className="secondary-button min-h-10 px-3 py-1.5 text-xs"
+                    disabled={removing === resource.id || creatingCal === resource.id}
+                    onClick={() => removeCal(resource, "unlink")}
+                    title="Unlink (keep the Google calendar)"
+                  >
+                    {removing === resource.id ? <LoaderCircle className="animate-spin" size={14} /> : <Unlink size={14} />} Unlink
+                  </button>
+                  <button
+                    className="secondary-button min-h-10 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50"
+                    disabled={removing === resource.id || creatingCal === resource.id}
+                    onClick={() => removeCal(resource, "google")}
+                    title="Delete this calendar from Google (permanent)"
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </>
+              )}
               {available && (
                 <button
                   className="primary-button min-h-10 px-3 py-1.5 text-xs"
@@ -2604,6 +2699,7 @@ function ResourceCalendarSection({ resources, available, reload, toast }: {
           </div>
         ))}
       </div>
+      {dialog}
     </div>
   );
 }
