@@ -125,11 +125,15 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       "SELECT calendar_id FROM calendar_mappings WHERE center_id=? AND mapping_type='center' AND event_role='canonical' AND enabled=1 LIMIT 1"
     ).bind(ctrId).first<{ calendar_id: string }>();
     if (mode === "google" && mapping?.calendar_id) {
+      // Block only if a future, non-cancelled booking still has a live calendar event on THIS
+      // calendar. Cancelled/completed bookings (events removed → sync_status='deleted') do not block.
       const future = await env.DB.prepare(`
-        SELECT COUNT(*) AS count FROM bookings WHERE center_id=? AND start_at>CURRENT_TIMESTAMP
-        AND status IN ('confirmed','calendar_sync_failed','pending_confirmation')
-      `).bind(ctrId).first<{ count: number }>();
-      if (future?.count) throw new HttpError(409, "This center has future bookings using this calendar; cancel them before deleting it from Google.", "future_bookings_exist");
+        SELECT COUNT(*) AS count FROM booking_calendar_events bce JOIN bookings b ON b.id=bce.booking_id
+        WHERE bce.calendar_id=? AND bce.sync_status != 'deleted'
+          AND b.start_at>CURRENT_TIMESTAMP
+          AND b.status IN ('confirmed','pending_confirmation','calendar_sync_failed','rescheduled')
+      `).bind(mapping.calendar_id).first<{ count: number }>();
+      if (future?.count) throw new HttpError(409, "This calendar has events for future active bookings; cancel them before deleting it from Google.", "future_bookings_exist");
       await deleteCalendar(env, mapping.calendar_id);
     }
     await env.DB.prepare("UPDATE calendar_mappings SET enabled=0, updated_at=CURRENT_TIMESTAMP WHERE center_id=? AND mapping_type='center' AND event_role='canonical'").bind(ctrId).run();
@@ -323,11 +327,15 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     ).bind(resId).first<{ calendar_id: string | null }>();
     if (!row) throw new HttpError(404, "Resource not found.");
     if (mode === "google" && row.calendar_id) {
+      // Block only if a future, non-cancelled booking still has a live calendar event on THIS
+      // calendar. Cancelled/completed bookings (events removed → sync_status='deleted') do not block.
       const future = await env.DB.prepare(`
-        SELECT COUNT(*) AS count FROM booking_resource_allocations bra JOIN bookings b ON b.id=bra.booking_id
-        WHERE bra.resource_id=? AND b.start_at>CURRENT_TIMESTAMP AND b.status IN ('confirmed','calendar_sync_failed')
-      `).bind(resId).first<{ count: number }>();
-      if (future?.count) throw new HttpError(409, "This resource has future bookings using this calendar; reassign or cancel them before deleting it from Google.", "future_bookings_exist");
+        SELECT COUNT(*) AS count FROM booking_calendar_events bce JOIN bookings b ON b.id=bce.booking_id
+        WHERE bce.calendar_id=? AND bce.sync_status != 'deleted'
+          AND b.start_at>CURRENT_TIMESTAMP
+          AND b.status IN ('confirmed','pending_confirmation','calendar_sync_failed','rescheduled')
+      `).bind(row.calendar_id).first<{ count: number }>();
+      if (future?.count) throw new HttpError(409, "This calendar has events for future active bookings; cancel or move them before deleting it from Google.", "future_bookings_exist");
       await deleteCalendar(env, row.calendar_id);
     }
     await env.DB.prepare("UPDATE resources SET calendar_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(resId).run();
