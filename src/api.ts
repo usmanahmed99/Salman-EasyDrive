@@ -154,6 +154,11 @@ export const adminApi = {
   updateCenter: (id: string, payload: Record<string, unknown>) =>
     request(`/api/admin/centers/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteCenter: (id: string) => request(`/api/admin/centers/${id}`, { method: "DELETE" }),
+  createCenterCalendar: (id: string) =>
+    request<{ id: string; calendarId: string; previousCalendarId: string | null }>(
+      `/api/admin/centers/${id}/calendar`, { method: "POST" }),
+  deleteCenterCalendar: (id: string, mode: "unlink" | "google") =>
+    request(`/api/admin/centers/${id}/calendar?mode=${mode}`, { method: "DELETE" }),
   reorderCenters: (orderedIds: string[]) =>
     request("/api/admin/centers/reorder", { method: "PUT", body: JSON.stringify({ orderedIds }) }),
 
@@ -182,6 +187,11 @@ export const adminApi = {
   updateResource: (id: string, payload: Record<string, unknown>) =>
     request(`/api/admin/resources/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteResource: (id: string) => request(`/api/admin/resources/${id}`, { method: "DELETE" }),
+  createResourceCalendar: (id: string) =>
+    request<{ id: string; calendarId: string; previousCalendarId: string | null }>(
+      `/api/admin/resources/${id}/calendar`, { method: "POST" }),
+  deleteResourceCalendar: (id: string, mode: "unlink" | "google") =>
+    request(`/api/admin/resources/${id}/calendar?mode=${mode}`, { method: "DELETE" }),
   resourceGroups: () => request<{ groups: ResourceGroup[] }>("/api/admin/resource-groups"),
   updateResourceGroup: (id: string, payload: { capacity?: number; enabled?: boolean }) =>
     request(`/api/admin/resource-groups/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),

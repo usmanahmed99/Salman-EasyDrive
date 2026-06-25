@@ -124,7 +124,10 @@ export async function handleGoogleCallback(request: Request, env: Env) {
   // calendar connection that belongs to the designated calendar account.
   if (purpose === "calendar" && token.refresh_token) {
     const encryptedToken = await encrypt(env.TOKEN_ENCRYPTION_KEY, token.refresh_token);
-    await env.DB.prepare("DELETE FROM google_connections WHERE user_id = ?").bind(userId).run();
+    // There is a single system-wide calendar connection (the designated calendar account),
+    // not one per admin. Replace ALL existing rows so reconnecting as a different admin / to a
+    // different Google account fully takes over (and accessToken()/the UI read the right one).
+    await env.DB.prepare("DELETE FROM google_connections").run();
     await env.DB.prepare(`
       INSERT INTO google_connections(id, user_id, google_email, encrypted_refresh_token, scopes)
       VALUES (?, ?, ?, ?, ?)

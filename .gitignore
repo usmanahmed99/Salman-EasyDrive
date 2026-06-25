@@ -16,3 +16,6 @@ test-results
 # Local embed/iframe test scaffolding (not part of the app or build)
 iframe-test.html
 serve-embed-test.mjs
+
+# Dev->prod data-migration working dir (contains real DB data incl. booking PII)
+.migration/

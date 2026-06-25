@@ -95,6 +95,52 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     return json({ ok: true });
   }
 
+  // Explicitly (re)create a center's canonical Google Calendar. Center calendars live in
+  // calendar_mappings (not a column), so this upserts the canonical mapping. Matched before the
+  // generic /api/admin/centers block below.
+  const centerCalMatch = path.match(/^\/api\/admin\/centers\/([^/]+)\/calendar$/);
+  if (centerCalMatch && method === "POST") {
+    const ctrId = centerCalMatch[1];
+    const ctr = await env.DB.prepare("SELECT name FROM centers WHERE id=? AND deleted_at IS NULL").bind(ctrId).first<{ name: string }>();
+    if (!ctr) throw new HttpError(404, "Center not found.");
+    const prev = await env.DB.prepare(
+      "SELECT calendar_id FROM calendar_mappings WHERE center_id=? AND mapping_type='center' AND event_role='canonical' AND enabled=1 LIMIT 1"
+    ).bind(ctrId).first<{ calendar_id: string }>();
+    const newCalendarId = await createCalendar(env, `Easy Driving - Center ${ctr.name}`);
+    if (!newCalendarId) throw new HttpError(503, "Google Calendar is not connected. Connect it under the Google Calendar tab and try again.", "google_not_connected");
+    // Disable existing canonical mapping(s) (old Google calendar left intact), insert the new one.
+    await env.DB.prepare("UPDATE calendar_mappings SET enabled=0, updated_at=CURRENT_TIMESTAMP WHERE center_id=? AND mapping_type='center' AND event_role='canonical'").bind(ctrId).run();
+    await env.DB.prepare("INSERT INTO calendar_mappings(id,center_id,mapping_type,mapping_id,calendar_id,event_role) VALUES(?,?,?,?,?,'canonical')")
+      .bind(uuid(), ctrId, "center", ctrId, newCalendarId).run();
+    await audit(env, user.id, "create_calendar", "center", ctrId, { calendarId: newCalendarId, previousCalendarId: prev?.calendar_id ?? null }, request);
+    return json({ id: ctrId, calendarId: newCalendarId, previousCalendarId: prev?.calendar_id ?? null });
+  }
+  // Unlink a center's canonical calendar (mode=unlink) or also delete it from Google (mode=google).
+  if (centerCalMatch && method === "DELETE") {
+    const ctrId = centerCalMatch[1];
+    const mode = new URL(request.url).searchParams.get("mode") === "google" ? "google" : "unlink";
+    const ctr = await env.DB.prepare("SELECT id FROM centers WHERE id=? AND deleted_at IS NULL").bind(ctrId).first();
+    if (!ctr) throw new HttpError(404, "Center not found.");
+    const mapping = await env.DB.prepare(
+      "SELECT calendar_id FROM calendar_mappings WHERE center_id=? AND mapping_type='center' AND event_role='canonical' AND enabled=1 LIMIT 1"
+    ).bind(ctrId).first<{ calendar_id: string }>();
+    if (mode === "google" && mapping?.calendar_id) {
+      // Block only if a future, non-cancelled booking still has a live calendar event on THIS
+      // calendar. Cancelled/completed bookings (events removed → sync_status='deleted') do not block.
+      const future = await env.DB.prepare(`
+        SELECT COUNT(*) AS count FROM booking_calendar_events bce JOIN bookings b ON b.id=bce.booking_id
+        WHERE bce.calendar_id=? AND bce.sync_status != 'deleted'
+          AND b.start_at>CURRENT_TIMESTAMP
+          AND b.status IN ('confirmed','pending_confirmation','calendar_sync_failed','rescheduled')
+      `).bind(mapping.calendar_id).first<{ count: number }>();
+      if (future?.count) throw new HttpError(409, "This calendar has events for future active bookings; cancel them before deleting it from Google.", "future_bookings_exist");
+      await deleteCalendar(env, mapping.calendar_id);
+    }
+    await env.DB.prepare("UPDATE calendar_mappings SET enabled=0, updated_at=CURRENT_TIMESTAMP WHERE center_id=? AND mapping_type='center' AND event_role='canonical'").bind(ctrId).run();
+    await audit(env, user.id, mode === "google" ? "delete_calendar" : "unlink_calendar", "center", ctrId, { calendarId: mapping?.calendar_id ?? null }, request);
+    return new Response(null, { status: 204 });
+  }
+
   if (path.startsWith("/api/admin/centers")) {
     const id = parseId(path, "/api/admin/centers");
     if (method === "GET") {
@@ -246,6 +292,55 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await audit(env, user.id, "delete", "service", id, {}, request);
       return new Response(null, { status: 204 });
     }
+  }
+
+  // Explicitly (re)create a Google Calendar for an existing resource. Matched before the generic
+  // /api/admin/resources block below, since parseId there would treat ":id/calendar" as the id.
+  const resourceCalMatch = path.match(/^\/api\/admin\/resources\/([^/]+)\/calendar$/);
+  if (resourceCalMatch && method === "POST") {
+    const resId = resourceCalMatch[1];
+    const row = await env.DB.prepare(
+      "SELECT type, name, email, calendar_id FROM resources WHERE id=? AND deleted_at IS NULL"
+    ).bind(resId).first<{ type: string; name: string; email: string | null; calendar_id: string | null }>();
+    if (!row) throw new HttpError(404, "Resource not found.");
+    const previousCalendarId = row.calendar_id;
+    const summary = `Easy Driving - ${row.type === "instructor" ? "Instructor" : "Resource"} ${row.name}`;
+    const newCalendarId = await createCalendar(env, summary);
+    if (!newCalendarId) throw new HttpError(503, "Google Calendar is not connected. Connect it under the Google Calendar tab and try again.", "google_not_connected");
+    await env.DB.prepare("UPDATE resources SET calendar_id=?, updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(newCalendarId, resId).run();
+    // The old Google calendar (previousCalendarId) is intentionally NOT deleted — it may live in a
+    // different Google account and hold historical events. Surfaced for manual cleanup instead.
+    if (row.email) {
+      shareCalendar(env, newCalendarId, row.email, "reader").catch((err: unknown) =>
+        console.error("[create-calendar] resource calendar share failed", err)
+      );
+    }
+    await audit(env, user.id, "create_calendar", "resource", resId, { calendarId: newCalendarId, previousCalendarId }, request);
+    return json({ id: resId, calendarId: newCalendarId, previousCalendarId });
+  }
+  // Unlink the calendar from a resource (mode=unlink) or also delete it from Google (mode=google).
+  if (resourceCalMatch && method === "DELETE") {
+    const resId = resourceCalMatch[1];
+    const mode = new URL(request.url).searchParams.get("mode") === "google" ? "google" : "unlink";
+    const row = await env.DB.prepare(
+      "SELECT calendar_id FROM resources WHERE id=? AND deleted_at IS NULL"
+    ).bind(resId).first<{ calendar_id: string | null }>();
+    if (!row) throw new HttpError(404, "Resource not found.");
+    if (mode === "google" && row.calendar_id) {
+      // Block only if a future, non-cancelled booking still has a live calendar event on THIS
+      // calendar. Cancelled/completed bookings (events removed → sync_status='deleted') do not block.
+      const future = await env.DB.prepare(`
+        SELECT COUNT(*) AS count FROM booking_calendar_events bce JOIN bookings b ON b.id=bce.booking_id
+        WHERE bce.calendar_id=? AND bce.sync_status != 'deleted'
+          AND b.start_at>CURRENT_TIMESTAMP
+          AND b.status IN ('confirmed','pending_confirmation','calendar_sync_failed','rescheduled')
+      `).bind(row.calendar_id).first<{ count: number }>();
+      if (future?.count) throw new HttpError(409, "This calendar has events for future active bookings; cancel or move them before deleting it from Google.", "future_bookings_exist");
+      await deleteCalendar(env, row.calendar_id);
+    }
+    await env.DB.prepare("UPDATE resources SET calendar_id=NULL, updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(resId).run();
+    await audit(env, user.id, mode === "google" ? "delete_calendar" : "unlink_calendar", "resource", resId, { calendarId: row.calendar_id }, request);
+    return new Response(null, { status: 204 });
   }
 
   if (path.startsWith("/api/admin/resources")) {
