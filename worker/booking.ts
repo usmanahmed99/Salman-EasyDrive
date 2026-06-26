@@ -25,6 +25,41 @@ function taxNote(mode: string | undefined, isFr: boolean) {
   return "";
 }
 
+// Formats a form answer for human display. Date/time fields are captured as raw
+// "datetime-local" strings ("2026-06-21T10:01") for easy entry, but everywhere we
+// show them to a person we render "Sun Jun 21, 2026 10:01 AM" instead of the raw
+// value. Non date/time fields (and unparseable values) pass through untouched.
+function formatAnswer(fieldType: string, value: unknown, isFr: boolean): string {
+  const raw = String(value);
+  const locale = isFr ? "fr-CA" : "en-CA";
+  // datetime-local has no zone; treat the wall-clock value as America/Montreal so
+  // the displayed time matches what the student typed.
+  if (fieldType === "datetime") {
+    const date = new Date(raw);
+    if (isNaN(date.getTime())) return raw;
+    return new Intl.DateTimeFormat(locale, {
+      weekday: "short", month: "short", day: "2-digit", year: "numeric",
+      hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Montreal"
+    }).format(date);
+  }
+  if (fieldType === "date") {
+    // Parse as a plain calendar date (no zone shift).
+    const date = new Date(`${raw}T12:00:00Z`);
+    if (isNaN(date.getTime())) return raw;
+    return new Intl.DateTimeFormat(locale, {
+      weekday: "short", month: "short", day: "2-digit", year: "numeric", timeZone: "UTC"
+    }).format(date);
+  }
+  if (fieldType === "time") {
+    const date = new Date(`2000-01-01T${raw}`);
+    if (isNaN(date.getTime())) return raw;
+    return new Intl.DateTimeFormat(locale, {
+      hour: "2-digit", minute: "2-digit", hour12: true
+    }).format(date);
+  }
+  return raw;
+}
+
 // Replaces {placeholder} tokens; unknown placeholders are left untouched so a
 // typo in the admin template is visible rather than silently dropping content.
 function renderTemplate(template: string, fields: TemplateFields) {
@@ -454,7 +489,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   const answers = JSON.parse(booking.response_json || "{}") as Record<string, unknown>;
   const visibleAnswers = form.fields
     .filter((field) => field.calendarVisible && answers[field.key])
-    .map((field) => `${field.label.en}: ${String(answers[field.key])}`);
+    .map((field) => `${field.label.en}: ${formatAnswer(field.type, answers[field.key], false)}`);
   const token = knownPublicToken || booking.manage_token || "";
   const manageUrl = token
     ? `${env.APP_BASE_URL.replace(/\/$/, "")}/booking/${booking.reference}?token=${encodeURIComponent(token)}`
@@ -467,7 +502,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   const isFr = booking.language === "fr";
   const visibleAnswersFr = form.fields
     .filter((field) => field.calendarVisible && answers[field.key])
-    .map((field) => `${field.label.fr || field.label.en}: ${String(answers[field.key])}`);
+    .map((field) => `${field.label.fr || field.label.en}: ${formatAnswer(field.type, answers[field.key], true)}`);
 
   // Price carries the same tax note shown on the public service cards.
   const note = taxNote(booking.price_tax_mode, isFr);
