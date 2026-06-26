@@ -13,8 +13,19 @@ interface TemplateFields {
   student: string;
   price: string;
   duration: string;
+  dateTime: string;
   manageUrl: string;
   visibleFields: string;
+}
+
+// Booking start instant → "Mon, Jun 29, 2026, 1:00 p.m." in the center's timezone.
+function formatBookingDateTime(iso: string, timeZone: string, isFr: boolean): string {
+  if (!iso) return "";
+  return new Intl.DateTimeFormat(isFr ? "fr-CA" : "en-CA", {
+    weekday: "short", month: "short", day: "2-digit", year: "numeric",
+    hour: "2-digit", minute: "2-digit", hour12: true,
+    timeZone: timeZone || "America/Montreal"
+  }).format(new Date(iso));
 }
 
 // Tax note appended to the price token, matching the public booking labels.
@@ -27,23 +38,26 @@ function taxNote(mode: string | undefined, isFr: boolean) {
 
 // Formats a form answer for human display. Date/time fields are captured as raw
 // "datetime-local" strings ("2026-06-21T10:01") for easy entry, but everywhere we
-// show them to a person we render "Sun Jun 21, 2026 10:01 AM" instead of the raw
-// value. Non date/time fields (and unparseable values) pass through untouched.
+// show them to a person we render "Sun, Jun 21, 2026, 10:01 a.m." instead of the
+// raw value. Non date/time fields (and unparseable values) pass through untouched.
+//
+// These values are bare wall-clock times with no timezone — they are NOT instants.
+// We anchor each to UTC and format in UTC so the displayed value is exactly what
+// the student typed, with no offset shift applied.
 function formatAnswer(fieldType: string, value: unknown, isFr: boolean): string {
   const raw = String(value);
   const locale = isFr ? "fr-CA" : "en-CA";
-  // datetime-local has no zone; treat the wall-clock value as America/Montreal so
-  // the displayed time matches what the student typed.
   if (fieldType === "datetime") {
-    const date = new Date(raw);
-    if (isNaN(date.getTime())) return raw;
+    const m = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+    if (!m) return raw;
+    const [, y, mo, d, h, mi] = m.map(Number);
+    const date = new Date(Date.UTC(y, mo - 1, d, h, mi));
     return new Intl.DateTimeFormat(locale, {
       weekday: "short", month: "short", day: "2-digit", year: "numeric",
-      hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "America/Montreal"
+      hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "UTC"
     }).format(date);
   }
   if (fieldType === "date") {
-    // Parse as a plain calendar date (no zone shift).
     const date = new Date(`${raw}T12:00:00Z`);
     if (isNaN(date.getTime())) return raw;
     return new Intl.DateTimeFormat(locale, {
@@ -51,10 +65,11 @@ function formatAnswer(fieldType: string, value: unknown, isFr: boolean): string 
     }).format(date);
   }
   if (fieldType === "time") {
-    const date = new Date(`2000-01-01T${raw}`);
-    if (isNaN(date.getTime())) return raw;
+    const m = raw.match(/^(\d{2}):(\d{2})/);
+    if (!m) return raw;
+    const date = new Date(Date.UTC(2000, 0, 1, Number(m[1]), Number(m[2])));
     return new Intl.DateTimeFormat(locale, {
-      hour: "2-digit", minute: "2-digit", hour12: true
+      hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "UTC"
     }).format(date);
   }
   return raw;
@@ -524,6 +539,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     student: booking.student_name || "Private",
     price: priceLabel,
     duration: durationLabel,
+    dateTime: formatBookingDateTime(booking.start_at, booking.timezone, isFr),
     manageUrl,
     visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n")
   };
@@ -534,6 +550,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     `Booking reference: ${fields.reference}`,
     `Student: ${fields.student}`,
     `Service: ${fields.service}`,
+    fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
     fields.duration ? `Duration: ${fields.duration}` : "",
     fields.price ? `Price: ${fields.price}` : "",
     `Center: ${fields.center}`,

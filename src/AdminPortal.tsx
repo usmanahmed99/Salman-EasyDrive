@@ -2510,7 +2510,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
             <p className="mt-1 text-xs text-slate-500">
               Customize the title and description of created calendar events (and the student's invite email).
               Leave a field blank to use the built-in default. Placeholders:
-              <span className="font-mono"> {"{service} {serviceDescription} {center} {reference} {student} {price} {duration} {manageUrl} {visibleFields}"}</span>
+              <span className="font-mono"> {"{service} {serviceDescription} {center} {reference} {student} {price} {duration} {dateTime} {manageUrl} {visibleFields}"}</span>
             </p>
           </div>
           <div className="space-y-4 p-5">
@@ -2529,7 +2529,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
                 className="field min-h-32 font-mono text-xs"
                 value={descriptionTemplate}
                 onChange={(event) => setDescriptionTemplate(event.target.value)}
-                placeholder={"Booking reference: {reference}\nStudent: {student}\nService: {service}\nCenter: {center}\n{visibleFields}\nManage or cancel: {manageUrl}"}
+                placeholder={"Booking reference: {reference}\nStudent: {student}\nService: {service}\nDate & time: {dateTime}\nCenter: {center}\n{visibleFields}\nManage or cancel: {manageUrl}"}
               />
             </label>
             <label className="block">
@@ -2538,7 +2538,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
                 className="field min-h-32 font-mono text-xs"
                 value={descriptionTemplateFr}
                 onChange={(event) => setDescriptionTemplateFr(event.target.value)}
-                placeholder={"Référence de réservation : {reference}\nÉtudiant : {student}\nService : {service}\nCentre : {center}\n{visibleFields}\nGérer ou annuler : {manageUrl}"}
+                placeholder={"Référence de réservation : {reference}\nÉtudiant : {student}\nService : {service}\nDate et heure : {dateTime}\nCentre : {center}\n{visibleFields}\nGérer ou annuler : {manageUrl}"}
               />
             </label>
             <div className="flex justify-end">
