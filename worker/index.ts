@@ -1,5 +1,6 @@
 import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, resourceMutationSchema } from "../shared/schemas";
 import type { BookingForm } from "../shared/types";
+import { validateBookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
@@ -422,6 +423,8 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     }
     const body = await readJson(request) as { name: string; schema: BookingForm };
     if (!body.name || !body.schema?.fields) throw new HttpError(400, "Form name and schema are required.");
+    const schemaProblems = validateBookingForm(body.schema);
+    if (schemaProblems.length) throw new HttpError(400, schemaProblems.join(" "));
     if (method === "POST") {
       const nextId = uuid();
       await env.DB.batch([

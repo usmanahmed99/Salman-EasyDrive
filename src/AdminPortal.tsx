@@ -49,6 +49,7 @@ import type {
   ResourceGroup,
   Service
 } from "../shared/types";
+import { fieldNeedsOptions, validateBookingForm } from "../shared/types";
 
 type AdminSection =
   | "dashboard"
@@ -2192,6 +2193,18 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   const removeOption = (field: FormField, index: number) =>
     updateField(field.id, { options: (field.options ?? []).filter((_, i) => i !== index) });
 
+  const changeFieldType = (field: FormField, type: FormField["type"]) => {
+    const patch: Partial<FormField> = { type };
+    if (fieldNeedsOptions(type) && !(field.options ?? []).length) {
+      // Seed a default option so the field renders correctly out of the box.
+      patch.options = [{ value: "option_1", label: { en: "Option 1", fr: "Option 1" } }];
+    } else if (!fieldNeedsOptions(type) && field.options) {
+      // Drop options that no longer apply to the new type.
+      patch.options = undefined;
+    }
+    updateField(field.id, patch);
+  };
+
   const moveField = (index: number, direction: -1 | 1) =>
     setSchema((current) => {
       if (!current) return current;
@@ -2236,6 +2249,11 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
 
   const publish = async () => {
     if (!schema) return;
+    const problems = validateBookingForm(schema);
+    if (problems.length) {
+      toast.show("error", problems[0]);
+      return;
+    }
     setSaving(true);
     try {
       const result = await adminApi.publishForm(selectedId, { name, schema });
@@ -2306,7 +2324,7 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
                     <label className="block"><span className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Label (FR)</span><input className="field py-2" value={field.label.fr} onChange={(event) => updateField(field.id, { label: { ...field.label, fr: event.target.value } })} /></label>
                     <label className="block"><span className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Key</span><input className="field py-2 font-mono text-xs" value={field.key} onChange={(event) => updateField(field.id, { key: event.target.value })} /></label>
                     <label className="block"><span className="mb-1 block text-[11px] font-bold uppercase tracking-wider text-slate-400">Type</span>
-                      <select className="field py-2" value={field.type} onChange={(event) => updateField(field.id, { type: event.target.value as FormField["type"] })}>
+                      <select className="field py-2" value={field.type} onChange={(event) => changeFieldType(field, event.target.value as FormField["type"])}>
                         {FIELD_TYPES.map((type) => <option value={type} key={type}>{type}</option>)}
                       </select>
                     </label>
