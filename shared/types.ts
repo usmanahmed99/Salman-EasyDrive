@@ -58,6 +58,8 @@ export interface FormField {
   helpText?: LocalizedText;
   required: boolean;
   options?: Array<{ value: string; label: LocalizedText }>;
+  /** For select/radio: the option value preselected when the form loads. */
+  defaultValue?: string;
   validation?: { min?: number; max?: number; pattern?: string };
   calendarVisible?: boolean;
   adminListVisible?: boolean;
@@ -69,6 +71,48 @@ export interface BookingForm {
   name: string;
   version: number;
   fields: FormField[];
+}
+
+/** Field types whose rendering requires a non-empty `options` list. */
+export const OPTION_FIELD_TYPES: FormFieldType[] = ["select", "radio"];
+
+export function fieldNeedsOptions(type: FormFieldType): boolean {
+  return OPTION_FIELD_TYPES.includes(type);
+}
+
+/**
+ * Validates a booking form schema. Returns a list of human-readable problems;
+ * an empty list means the schema is valid. Shared by the admin client (to block
+ * publishing) and the worker (to reject bad payloads).
+ */
+export function validateBookingForm(schema: Pick<BookingForm, "fields">): string[] {
+  const errors: string[] = [];
+  const seenKeys = new Set<string>();
+  schema.fields.forEach((field, index) => {
+    const name = field.label?.en?.trim() || field.key || `Field ${index + 1}`;
+    if (!field.key?.trim()) errors.push(`${name}: key is required.`);
+    else if (seenKeys.has(field.key)) errors.push(`Duplicate key "${field.key}".`);
+    else seenKeys.add(field.key);
+
+    if (fieldNeedsOptions(field.type)) {
+      const options = field.options ?? [];
+      if (options.length === 0) {
+        errors.push(`${name}: ${field.type} field needs at least one option.`);
+      } else {
+        const seenValues = new Set<string>();
+        options.forEach((option, optIndex) => {
+          if (!option.value?.trim()) errors.push(`${name}: option ${optIndex + 1} is missing a value.`);
+          else if (seenValues.has(option.value)) errors.push(`${name}: duplicate option value "${option.value}".`);
+          else seenValues.add(option.value);
+          if (!option.label?.en?.trim() && !option.label?.fr?.trim()) errors.push(`${name}: option ${optIndex + 1} is missing a label.`);
+        });
+        if (field.defaultValue && !options.some((option) => option.value === field.defaultValue)) {
+          errors.push(`${name}: default value "${field.defaultValue}" does not match any option.`);
+        }
+      }
+    }
+  });
+  return errors;
 }
 
 export interface Slot {
