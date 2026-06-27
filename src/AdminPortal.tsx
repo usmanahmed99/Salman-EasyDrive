@@ -2187,11 +2187,27 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   const addOption = (field: FormField) =>
     updateField(field.id, { options: [...(field.options ?? []), { value: `option_${(field.options?.length ?? 0) + 1}`, label: { en: "", fr: "" } }] });
 
-  const updateOption = (field: FormField, index: number, patch: Partial<NonNullable<FormField["options"]>[number]>) =>
-    updateField(field.id, { options: (field.options ?? []).map((option, i) => i === index ? { ...option, ...patch } : option) });
+  const updateOption = (field: FormField, index: number, patch: Partial<NonNullable<FormField["options"]>[number]>) => {
+    const previous = (field.options ?? [])[index];
+    const fieldPatch: Partial<FormField> = {
+      options: (field.options ?? []).map((option, i) => i === index ? { ...option, ...patch } : option)
+    };
+    // Keep the default pointer in sync when the selected option's value is renamed.
+    if (patch.value !== undefined && previous && field.defaultValue === previous.value) {
+      fieldPatch.defaultValue = patch.value;
+    }
+    updateField(field.id, fieldPatch);
+  };
 
-  const removeOption = (field: FormField, index: number) =>
-    updateField(field.id, { options: (field.options ?? []).filter((_, i) => i !== index) });
+  const removeOption = (field: FormField, index: number) => {
+    const removed = (field.options ?? [])[index];
+    const fieldPatch: Partial<FormField> = { options: (field.options ?? []).filter((_, i) => i !== index) };
+    if (removed && field.defaultValue === removed.value) fieldPatch.defaultValue = undefined;
+    updateField(field.id, fieldPatch);
+  };
+
+  const setDefaultOption = (field: FormField, value: string) =>
+    updateField(field.id, { defaultValue: field.defaultValue === value ? undefined : value });
 
   const changeFieldType = (field: FormField, type: FormField["type"]) => {
     const patch: Partial<FormField> = { type };
@@ -2199,8 +2215,9 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
       // Seed a default option so the field renders correctly out of the box.
       patch.options = [{ value: "option_1", label: { en: "Option 1", fr: "Option 1" } }];
     } else if (!fieldNeedsOptions(type) && field.options) {
-      // Drop options that no longer apply to the new type.
+      // Drop options (and any default pointer) that no longer apply to the new type.
       patch.options = undefined;
+      patch.defaultValue = undefined;
     }
     updateField(field.id, patch);
   };
@@ -2339,10 +2356,20 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
                 </div>
                 {(field.type === "radio" || field.type === "select") && (
                   <div className="mt-3 border-t border-slate-100 pt-3">
-                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Options</p>
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Options <span className="font-normal normal-case text-slate-400">· select a row's circle to preselect it by default (click again to clear)</span></p>
                     <div className="space-y-2">
                       {(field.options ?? []).map((option, optIndex) => (
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center" key={optIndex}>
+                          <label className="flex shrink-0 items-center gap-1.5 text-xs font-semibold text-slate-500" title="Default selected value">
+                            <input
+                              type="radio"
+                              className="h-4 w-4 border-slate-300 text-brand-600"
+                              checked={field.defaultValue === option.value && Boolean(option.value)}
+                              onClick={() => setDefaultOption(field, option.value)}
+                              onChange={() => {}}
+                            />
+                            <span className="sm:hidden">Default</span>
+                          </label>
                           <input
                             className="field py-2 sm:flex-1"
                             placeholder="Label (EN)"

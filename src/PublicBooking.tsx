@@ -464,7 +464,19 @@ export default function PublicBooking() {
 
   useEffect(() => {
     if (!service?.formId || stage !== "details") return;
-    getForm(service.formId).then(setForm);
+    getForm(service.formId).then((loaded) => {
+      setForm(loaded);
+      // Seed default selections for select/radio fields not yet answered.
+      setAnswers((current) => {
+        const seeded = { ...current };
+        for (const field of loaded.fields) {
+          if (field.defaultValue !== undefined && seeded[field.key] === undefined) {
+            seeded[field.key] = field.defaultValue;
+          }
+        }
+        return seeded;
+      });
+    });
   }, [service, stage]);
 
   const chooseCenter = (nextCenter: Center) => {

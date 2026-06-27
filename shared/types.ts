@@ -58,6 +58,8 @@ export interface FormField {
   helpText?: LocalizedText;
   required: boolean;
   options?: Array<{ value: string; label: LocalizedText }>;
+  /** For select/radio: the option value preselected when the form loads. */
+  defaultValue?: string;
   validation?: { min?: number; max?: number; pattern?: string };
   calendarVisible?: boolean;
   adminListVisible?: boolean;
@@ -104,6 +106,9 @@ export function validateBookingForm(schema: Pick<BookingForm, "fields">): string
           else seenValues.add(option.value);
           if (!option.label?.en?.trim() && !option.label?.fr?.trim()) errors.push(`${name}: option ${optIndex + 1} is missing a label.`);
         });
+        if (field.defaultValue && !options.some((option) => option.value === field.defaultValue)) {
+          errors.push(`${name}: default value "${field.defaultValue}" does not match any option.`);
+        }
       }
     }
   });
