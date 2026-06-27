@@ -2183,6 +2183,15 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   const removeField = (id: string) =>
     setSchema((current) => current ? { ...current, fields: current.fields.filter((field) => field.id !== id) } : current);
 
+  const addOption = (field: FormField) =>
+    updateField(field.id, { options: [...(field.options ?? []), { value: `option_${(field.options?.length ?? 0) + 1}`, label: { en: "", fr: "" } }] });
+
+  const updateOption = (field: FormField, index: number, patch: Partial<NonNullable<FormField["options"]>[number]>) =>
+    updateField(field.id, { options: (field.options ?? []).map((option, i) => i === index ? { ...option, ...patch } : option) });
+
+  const removeOption = (field: FormField, index: number) =>
+    updateField(field.id, { options: (field.options ?? []).filter((_, i) => i !== index) });
+
   const moveField = (index: number, direction: -1 | 1) =>
     setSchema((current) => {
       if (!current) return current;
@@ -2310,6 +2319,38 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
                   <label className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-brand-600" checked={Boolean(field.adminListVisible)} onChange={(event) => updateField(field.id, { adminListVisible: event.target.checked })} /> Show in admin list</label>
                   <button className="ml-auto inline-flex items-center gap-1.5 font-bold text-red-600 sm:hidden" onClick={() => removeField(field.id)}><Trash2 size={14} /> Remove</button>
                 </div>
+                {(field.type === "radio" || field.type === "select") && (
+                  <div className="mt-3 border-t border-slate-100 pt-3">
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Options</p>
+                    <div className="space-y-2">
+                      {(field.options ?? []).map((option, optIndex) => (
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center" key={optIndex}>
+                          <input
+                            className="field py-2 sm:flex-1"
+                            placeholder="Label (EN)"
+                            value={option.label.en}
+                            onChange={(event) => updateOption(field, optIndex, { label: { ...option.label, en: event.target.value } })}
+                          />
+                          <input
+                            className="field py-2 sm:flex-1"
+                            placeholder="Label (FR)"
+                            value={option.label.fr}
+                            onChange={(event) => updateOption(field, optIndex, { label: { ...option.label, fr: event.target.value } })}
+                          />
+                          <input
+                            className="field py-2 font-mono text-xs sm:w-40"
+                            placeholder="value"
+                            value={option.value}
+                            onChange={(event) => updateOption(field, optIndex, { value: event.target.value })}
+                          />
+                          <button className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600" title="Remove option" onClick={() => removeOption(field, optIndex)}><Trash2 size={15} /></button>
+                        </div>
+                      ))}
+                    </div>
+                    <button className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 hover:text-brand-700" onClick={() => addOption(field)}><Plus size={14} /> Add option</button>
+                    {(field.options ?? []).length === 0 && <p className="mt-2 text-xs text-slate-400">No options yet — add at least one for this field to appear correctly.</p>}
+                  </div>
+                )}
               </div>
             ))}
             <button className="w-full rounded-xl border-2 border-dashed border-slate-200 bg-white py-4 text-sm font-bold text-slate-500 hover:border-brand-300 hover:text-brand-600" onClick={addField}><Plus className="mr-2 inline" size={16} />Add field</button>
