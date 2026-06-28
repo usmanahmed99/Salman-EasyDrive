@@ -203,6 +203,17 @@ export async function confirmPackageBooking(env: Env, payload: PackageBookingPay
   if (problem === "package_mismatch") throw new HttpError(400, "The selected sessions do not match this package.", "package_mismatch");
   if (problem === "duplicate_slot") throw new HttpError(400, "Please choose a different time for each session.", "duplicate_slot");
 
+  // At most 2 hours of lessons per local calendar day. The client disables over-cap slots, but
+  // enforce it here too so the rule can't be bypassed by a crafted request.
+  const minutesBySlug = new Map(pkg.items.map((item) => [item.serviceSlug, item.durationMinutes]));
+  const minutesByDay = new Map<string, number>();
+  for (const session of payload.sessions) {
+    const day = dateInTimeZone(session.start, center.timezone);
+    const total = (minutesByDay.get(day) ?? 0) + (minutesBySlug.get(session.serviceSlug) ?? 0);
+    if (total > 120) throw new HttpError(400, "You can book at most 2 hours of lessons per day.", "package_daily_limit");
+    minutesByDay.set(day, total);
+  }
+
   const packageBookingId = uuid();
   const packageReference = `PKG-${Math.floor(100000 + Math.random() * 900000)}`;
   const packageToken = randomToken(32);

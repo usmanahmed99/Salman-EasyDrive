@@ -1101,6 +1101,19 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
   const isSlotTaken = (start: string, exceptIndex: number) =>
     sessions.some((session, index) => index !== exceptIndex && session.slot?.start === start);
 
+  // A user may book at most 2 hours of lessons on any single calendar day across the package.
+  // Sum the minutes already committed (by other sessions) on a given local day.
+  const MAX_DAILY_MINUTES = 120;
+  const committedMinutesOnDay = (localDate: string, exceptIndex: number) =>
+    sessions.reduce((sum, session, index) =>
+      index !== exceptIndex && session.slot && wallClockParts(session.slot.start).date === localDate
+        ? sum + session.durationMinutes
+        : sum, 0);
+
+  // True if picking `start` for the active session would exceed the 2h/day cap.
+  const exceedsDailyCap = (start: string) =>
+    committedMinutesOnDay(wallClockParts(start).date, activeIndex) + active.durationMinutes > MAX_DAILY_MINUTES;
+
   const pickSlot = (slot: Slot) => {
     setSessions((prev) => prev.map((session, index) => index === activeIndex ? { ...session, slot } : session));
     // Auto-advance to the next unscheduled session for a smooth flow.
@@ -1243,8 +1256,11 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                       className={clsx(
                         "relative cursor-pointer rounded-xl border py-2 pl-3 text-left text-xs font-bold transition",
                         hasDescription ? "pr-8" : "pr-3",
-                        index === activeIndex ? "border-brand-600 bg-brand-50 text-brand-700"
-                          : session.slot ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                        // A picked session is always green; the active one gets a heavier ring so it
+                        // still reads as "current" without overriding the picked (green) state — otherwise
+                        // the last-picked session stays blue/active and looks unscheduled.
+                        session.slot ? clsx("border-emerald-300 bg-emerald-50 text-emerald-700", index === activeIndex && "ring-2 ring-emerald-400")
+                          : index === activeIndex ? "border-brand-600 bg-brand-50 text-brand-700"
                           : "border-slate-200 bg-white text-slate-600 hover:border-brand-300"
                       )}
                       onClick={() => setActiveIndex(index)}
@@ -1289,6 +1305,11 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                     </div>
                     <ShieldCheck className="text-emerald-500" size={22} />
                   </div>
+                  {committedMinutesOnDay(date, activeIndex) + active.durationMinutes > MAX_DAILY_MINUTES && (
+                    <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                      {t.dailyLimitHint}
+                    </p>
+                  )}
                   {slotLoading ? (
                     <div className="grid grid-cols-2 gap-3 py-7 sm:grid-cols-3">
                       {Array.from({ length: 6 }).map((_, index) => <div className="skeleton h-12 rounded-xl" key={index} />)}
@@ -1298,15 +1319,19 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                       {slots.map((item) => {
                         const taken = isSlotTaken(item.start, activeIndex);
                         const selected = active.slot?.start === item.start;
+                        // Block slots that would push this day past the 2h/day cap (selected slot stays clickable).
+                        const capped = !selected && exceedsDailyCap(item.start);
+                        const disabled = taken || capped;
                         return (
                           <button
                             className={clsx(
                               "rounded-xl border px-4 py-3 text-sm font-bold transition",
                               selected ? "border-brand-600 bg-brand-600 text-white shadow-lg shadow-brand-600/20"
-                                : taken ? "cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300"
+                                : disabled ? "cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300"
                                 : "border-slate-200 bg-white text-ink hover:border-brand-400 hover:bg-brand-50"
                             )}
-                            disabled={taken}
+                            disabled={disabled}
+                            title={capped ? t.dailyLimitHint : undefined}
                             onClick={() => pickSlot(item)}
                             key={item.start}
                           >

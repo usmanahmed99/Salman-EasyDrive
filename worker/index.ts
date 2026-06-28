@@ -329,6 +329,11 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       `).bind(...ids).all<Parameters<typeof packageResponse>[1][number]>()).results;
       return json({ packages: rows.results.map((row) => packageResponse(row, items)) });
     }
+    if (method === "DELETE" && id) {
+      await env.DB.prepare("UPDATE packages SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
+      await audit(env, user.id, "delete", "package", id, {}, request);
+      return new Response(null, { status: 204 });
+    }
     const body = await readJson(request) as Record<string, unknown>;
     const values = {
       slug: String(body.slug || ""),
@@ -384,11 +389,6 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.batch(statements);
       await audit(env, user.id, "update", "package", id, body, request);
       return json({ id });
-    }
-    if (method === "DELETE" && id) {
-      await env.DB.prepare("UPDATE packages SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
-      await audit(env, user.id, "delete", "package", id, {}, request);
-      return new Response(null, { status: 204 });
     }
   }
 
