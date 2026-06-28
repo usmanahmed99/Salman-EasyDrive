@@ -40,7 +40,19 @@ export const copy = {
     requestOnly: "Request only",
     taxIncl: "Tax Incl.",
     taxPlus: "+ Tax",
-    backToSite: "Back to main website"
+    backToSite: "Back to main website",
+    packageLabel: "Package",
+    sessionsLabel: "sessions",
+    sessionStep: "Session",
+    packageSchedule: "Your package schedule",
+    chooseSessionTime: "Choose a time for each session",
+    packageSessionConflict: "This time is no longer available. Please pick another for this session.",
+    pickedTime: "Selected",
+    notPicked: "Not selected yet",
+    reviewPackage: "Review your package",
+    confirmPackage: "Confirm package booking",
+    packageSuccessTitle: "Your package is booked.",
+    packageSuccessText: "A calendar invitation for each session is on its way. Each session can be managed individually."
   },
   fr: {
     book: "Réserver",
@@ -81,7 +93,19 @@ export const copy = {
     requestOnly: "Sur demande",
     taxIncl: "Taxes incluses",
     taxPlus: "+ Taxes",
-    backToSite: "Retour au site principal"
+    backToSite: "Retour au site principal",
+    packageLabel: "Forfait",
+    sessionsLabel: "séances",
+    sessionStep: "Séance",
+    packageSchedule: "Votre calendrier de forfait",
+    chooseSessionTime: "Choisissez une heure pour chaque séance",
+    packageSessionConflict: "Cette heure n'est plus disponible. Veuillez en choisir une autre pour cette séance.",
+    pickedTime: "Sélectionné",
+    notPicked: "Pas encore sélectionné",
+    reviewPackage: "Vérifiez votre forfait",
+    confirmPackage: "Confirmer la réservation du forfait",
+    packageSuccessTitle: "Votre forfait est réservé.",
+    packageSuccessText: "Une invitation calendrier pour chaque séance est en route. Chaque séance peut être gérée individuellement."
   }
 } as const;
 

@@ -23,13 +23,15 @@ import {
 import { addMonths, eachDayOfInterval, endOfMonth, format, isBefore, isSameDay, isSameMonth, startOfMonth, startOfWeek, endOfWeek, startOfDay } from "date-fns";
 import clsx from "clsx";
 import { copy, getLanguage } from "./i18n";
-import { createBooking, getAvailability, getCenters, getForm, getPublicConfig, getServices } from "./api";
+import { createBooking, createPackageBooking, getAvailability, getCenters, getForm, getPackages, getPublicConfig, getServices } from "./api";
 import type {
   BookingConfirmation,
   BookingForm,
   Center,
   FormField,
   Language,
+  Package,
+  PackageBookingConfirmation,
   PublicConfig,
   Service,
   Slot
@@ -453,8 +455,11 @@ export default function PublicBooking() {
   const [config, setConfig] = useState<PublicConfig>();
   const [centers, setCenters] = useState<Center[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [packages, setPackages] = useState<Package[]>([]);
   const [center, setCenter] = useState<Center>();
   const [service, setService] = useState<Service>();
+  // When set, the service stage hands off to the dedicated multi-session package flow.
+  const [selectedPackage, setSelectedPackage] = useState<Package>();
   const [stage, setStage] = useState<Stage>("center");
   const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -487,8 +492,9 @@ export default function PublicBooking() {
   useEffect(() => {
     if (!center) return;
     setLoading(true);
-    getServices(center.slug).then((nextServices) => {
+    Promise.all([getServices(center.slug), getPackages(center.slug)]).then(([nextServices, nextPackages]) => {
       setServices(nextServices);
+      setPackages(nextPackages);
       const matched = nextServices.find((item) => item.slug === preselectedService);
       if (matched) {
         setService(matched);
@@ -545,6 +551,7 @@ export default function PublicBooking() {
   const chooseCenter = (nextCenter: Center) => {
     setCenter(nextCenter);
     setService(undefined);
+    setSelectedPackage(undefined);
     setSlot(undefined);
     setStage("service");
   };
@@ -666,6 +673,20 @@ export default function PublicBooking() {
     );
   }
 
+  if (selectedPackage && center) {
+    return (
+      <PackageBookingFlow
+        pkg={selectedPackage}
+        center={center}
+        language={language}
+        embedded={embedded}
+        config={config}
+        onLanguage={setLanguage}
+        onExit={() => setSelectedPackage(undefined)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen overflow-x-hidden">
       {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-3 py-3 backdrop-blur sm:px-6 sm:py-4">
@@ -755,6 +776,40 @@ export default function PublicBooking() {
               <div>
                 <p className="text-base font-extrabold uppercase tracking-[0.14em] text-brand-600 sm:text-lg">{center?.name}</p>
                 <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseService}</h1>
+                {!loading && packages.length > 0 && (
+                  <div className="mt-7 grid gap-3 sm:grid-cols-2">
+                    {packages.map((pkg) => {
+                      const { price, note } = priceParts(pkg, t);
+                      return (
+                        <button
+                          className="card group flex min-h-44 flex-col border-brand-200 bg-brand-50/40 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-soft sm:p-5"
+                          onClick={() => setSelectedPackage(pkg)}
+                          key={pkg.id}
+                        >
+                          <div className="flex w-full items-start justify-between gap-4">
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                              <Sparkles size={12} /> {t.packageLabel} · {pkg.sessionCount} {t.sessionsLabel}
+                            </span>
+                            {price && (
+                              <span className="whitespace-nowrap rounded-lg bg-ink px-3 py-1.5 text-sm font-extrabold text-white">
+                                {price}{note && <span className="ml-1">{note}</span>}
+                              </span>
+                            )}
+                          </div>
+                          <h2 className="mt-4 text-lg font-extrabold text-ink">{localize(pkg.name, language)}</h2>
+                          <div className="flex-1">
+                            <DescriptionMarkdown text={localize(pkg.description, language)} />
+                          </div>
+                          <div className="mt-4 flex items-center justify-end text-xs">
+                            <span className="flex items-center gap-1 font-bold text-brand-600">
+                              {t.continue} <ArrowRight size={14} />
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 <div className="mt-7 grid gap-3 sm:grid-cols-2">
                   {loading
                     ? Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-44 rounded-2xl" key={index} />)
@@ -919,6 +974,410 @@ export default function PublicBooking() {
           <div className={clsx(stage === "center" && "hidden lg:block")}>
             <ServiceSummary center={center} service={service} slot={slot} language={language} />
           </div>
+        </div>
+      </main>
+      {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-4 py-6 text-center text-xs leading-5 text-slate-500">
+        © {new Date().getFullYear()} Easy Driving School · Secure booking powered by Cloudflare
+      </footer>}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Package booking (multi-session)                                            */
+/* -------------------------------------------------------------------------- */
+
+type PackageStage = "schedule" | "details" | "confirmed";
+
+/** Expands a package's items into a flat, ordered list of one entry per session. */
+interface SessionSlot {
+  serviceSlug: string;
+  serviceName: { en: string; fr: string };
+  durationMinutes: number;
+  slot?: Slot;
+}
+
+function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguage, onExit }: {
+  pkg: Package;
+  center: Center;
+  language: Language;
+  embedded: boolean;
+  config?: PublicConfig;
+  onLanguage: (language: Language) => void;
+  onExit: () => void;
+}) {
+  const t = copy[language];
+  const [stage, setStage] = useState<PackageStage>("schedule");
+  // One row per session, in package-item order. Each holds its chosen slot once picked.
+  const [sessions, setSessions] = useState<SessionSlot[]>(() =>
+    pkg.items.flatMap((item) =>
+      Array.from({ length: item.quantity }, () => ({
+        serviceSlug: item.serviceSlug,
+        serviceName: item.serviceName,
+        durationMinutes: item.durationMinutes
+      }))
+    )
+  );
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [slotLoading, setSlotLoading] = useState(false);
+  const [form, setForm] = useState<BookingForm>();
+  const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [confirmEmail, setConfirmEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmation, setConfirmation] = useState<PackageBookingConfirmation>();
+
+  const active = sessions[activeIndex];
+  const allPicked = sessions.every((session) => session.slot);
+  // The distinct services in the package (order preserved) — each may carry its own form.
+  const serviceSlugs = useMemo(
+    () => [...new Set(sessions.map((session) => session.serviceSlug))],
+    [sessions]
+  );
+
+  // Load availability for the active session's service + date.
+  useEffect(() => {
+    if (stage !== "schedule" || !active) return;
+    setSlotLoading(true);
+    getAvailability(center.slug, active.serviceSlug, date)
+      .then(setSlots)
+      .catch((nextError: Error) => { setSlots([]); setError(nextError.message); })
+      .finally(() => setSlotLoading(false));
+  }, [center.slug, active, date, stage, activeIndex]);
+
+  // Load and MERGE every distinct service's form into one, filled once. Fields are deduped by key
+  // (so shared fields like name/email/phone appear once); a required duplicate wins over optional.
+  // The backend still validates each session against its own service's form, so every merged field
+  // reaches the form that needs it.
+  useEffect(() => {
+    if (stage !== "details" || form || serviceSlugs.length === 0) return;
+    (async () => {
+      const services = await getServices(center.slug);
+      const formIds = [...new Set(
+        serviceSlugs
+          .map((slug) => services.find((item) => item.slug === slug)?.formId)
+          .filter((id): id is string => Boolean(id))
+      )];
+      const forms = await Promise.all(formIds.map((id) => getForm(id)));
+      const byKey = new Map<string, FormField>();
+      for (const loaded of forms) {
+        for (const field of loaded.fields) {
+          const existing = byKey.get(field.key);
+          // Keep the first occurrence, but upgrade to required if any form requires the field.
+          if (!existing) byKey.set(field.key, field);
+          else if (field.required && !existing.required) byKey.set(field.key, { ...existing, required: true });
+        }
+      }
+      const mergedFields = [...byKey.values()];
+      const merged: BookingForm = {
+        id: "package-merged",
+        name: localize(pkg.name, language),
+        version: forms[0]?.version ?? 1,
+        fields: mergedFields
+      };
+      setForm(merged);
+      setAnswers((current) => {
+        const seeded = { ...current };
+        for (const field of mergedFields) {
+          if (seeded[field.key] === undefined && field.defaultValue !== undefined
+            && field.type !== "date" && field.type !== "time" && field.type !== "datetime") {
+            seeded[field.key] = field.defaultValue;
+          }
+        }
+        return seeded;
+      });
+    })().catch((nextError: Error) => setError(nextError.message));
+  }, [stage, serviceSlugs, center.slug, form, pkg.name, language]);
+
+  // Disallow picking a slot already chosen for another session in this package.
+  const isSlotTaken = (start: string, exceptIndex: number) =>
+    sessions.some((session, index) => index !== exceptIndex && session.slot?.start === start);
+
+  const pickSlot = (slot: Slot) => {
+    setSessions((prev) => prev.map((session, index) => index === activeIndex ? { ...session, slot } : session));
+    // Auto-advance to the next unscheduled session for a smooth flow.
+    const nextUnpicked = sessions.findIndex((session, index) => index !== activeIndex && !session.slot);
+    if (nextUnpicked !== -1) setActiveIndex(nextUnpicked);
+  };
+
+  const submit = async () => {
+    if (!form || !allPicked) return;
+    const missing = form.fields.find((field) => field.required && !answers[field.key]);
+    if (missing) { setError(`${localize(missing.label, language)} — ${t.required}`); return; }
+    const emailField = form.fields.find((f) => f.type === "email");
+    if (emailField) {
+      const emailVal = String(answers[emailField.key] || "");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) { setError(t.emailInvalid); return; }
+      if (emailVal.toLowerCase() !== confirmEmail.toLowerCase().trim()) { setError(t.emailMismatch); return; }
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const result = await createPackageBooking({
+        centerSlug: center.slug,
+        packageSlug: pkg.slug,
+        language,
+        formVersion: form.version,
+        answers,
+        sessions: sessions.map((session) => ({ serviceSlug: session.serviceSlug, start: session.slot!.start }))
+      });
+      setConfirmation(result);
+      setStage("confirmed");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : t.packageSessionConflict;
+      setError(message);
+      // On a session conflict, send the customer back to scheduling to re-pick.
+      setStage("schedule");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const Header = () => (
+    <>
+      {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-3 py-3 backdrop-blur sm:px-6 sm:py-4">
+        <div className="mx-auto flex min-w-0 max-w-6xl items-center justify-between gap-3">
+          <Logo />
+          <div className="flex shrink-0 items-center gap-2">
+            {config?.brand.supportPhone && (
+              <a className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-ink sm:flex" href={`tel:${config.brand.supportPhone}`}>
+                <Phone size={16} /> {config.brand.supportPhone}
+              </a>
+            )}
+            <button className="secondary-button min-h-10 px-3 py-2" onClick={() => onLanguage(language === "en" ? "fr" : "en")}>
+              <Languages size={17} /> {language === "en" ? "FR" : "EN"}
+            </button>
+          </div>
+        </div>
+      </header>}
+    </>
+  );
+
+  if (stage === "confirmed" && confirmation) {
+    return (
+      <div className="min-h-screen overflow-x-hidden bg-white">
+        <Header />
+        <main className="mx-auto max-w-2xl px-4 py-10 sm:px-5 sm:py-16">
+          <div className="text-center">
+            <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-emerald-50 text-emerald-600">
+              <CheckCircle2 size={40} />
+            </div>
+            <h1 className="mt-6 text-3xl font-extrabold tracking-tight text-ink">{t.packageSuccessTitle}</h1>
+            <p className="mt-3 text-sm text-slate-600">{t.packageSuccessText}</p>
+            <p className="mt-2 text-xs font-semibold text-slate-400">{t.reference}: {confirmation.reference}</p>
+          </div>
+          <div className="card mt-8 divide-y divide-slate-100 p-2">
+            {confirmation.sessions.map((session, index) => (
+              <div className="flex items-center justify-between gap-4 p-3" key={session.id}>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-ink">{index + 1}. {session.serviceName}</p>
+                  <p className="text-xs text-slate-500">
+                    {new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", {
+                      weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE
+                    }).format(new Date(session.start))} · {formatSlot(session.start, language)}
+                  </p>
+                </div>
+                <a
+                  className="secondary-button min-h-9 shrink-0 px-3 py-1.5 text-xs"
+                  href={`/booking/${session.reference}?token=${encodeURIComponent(session.manageToken || "")}`}
+                >
+                  {t.manage}
+                </a>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 flex justify-center">
+            <button className="secondary-button" onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}>
+              {t.another}
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  const pickedCount = sessions.filter((session) => session.slot).length;
+
+  return (
+    <div className="min-h-screen overflow-x-hidden">
+      <Header />
+      <main className="mx-auto min-w-0 max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
+        <button
+          className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+          onClick={() => stage === "details" ? setStage("schedule") : onExit()}
+        >
+          <ArrowLeft size={17} /> {t.back}
+        </button>
+
+        {error && (
+          <div className="mb-5 rounded-xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700" role="alert">
+            {error}
+          </div>
+        )}
+
+        <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+          <section>
+            <p className="eyebrow">{localize(pkg.name, language)} · {pkg.sessionCount} {t.sessionsLabel}</p>
+
+            {stage === "schedule" && active && (
+              <div>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseSessionTime}</h1>
+                {/* Session tabs: pick which session you're scheduling. */}
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {sessions.map((session, index) => (
+                    <button
+                      className={clsx(
+                        "rounded-xl border px-3 py-2 text-left text-xs font-bold transition",
+                        index === activeIndex ? "border-brand-600 bg-brand-50 text-brand-700"
+                          : session.slot ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-brand-300"
+                      )}
+                      onClick={() => setActiveIndex(index)}
+                      key={index}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {session.slot ? <Check size={13} /> : <span className="grid h-4 w-4 place-items-center rounded-full bg-slate-200 text-[9px] text-slate-600">{index + 1}</span>}
+                        {localize(session.serviceName, language)}
+                      </span>
+                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">
+                        {session.slot ? formatSlot(session.slot.start, language) : t.notPicked}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                <p className="mt-5 text-sm font-bold text-ink">
+                  {t.sessionStep} {activeIndex + 1}/{sessions.length}: {localize(active.serviceName, language)}
+                </p>
+                <div className="card mt-3 p-4">
+                  <MiniCalendar selected={date} onChange={setDate} language={language} />
+                </div>
+                <div className="card mt-5 p-4 sm:p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-extrabold capitalize text-ink">{formatDateLong(date, language)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{t.availableTimes} · America/Montreal</p>
+                    </div>
+                    <ShieldCheck className="text-emerald-500" size={22} />
+                  </div>
+                  {slotLoading ? (
+                    <div className="grid grid-cols-2 gap-3 py-7 sm:grid-cols-3">
+                      {Array.from({ length: 6 }).map((_, index) => <div className="skeleton h-12 rounded-xl" key={index} />)}
+                    </div>
+                  ) : slots.length ? (
+                    <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {slots.map((item) => {
+                        const taken = isSlotTaken(item.start, activeIndex);
+                        const selected = active.slot?.start === item.start;
+                        return (
+                          <button
+                            className={clsx(
+                              "rounded-xl border px-4 py-3 text-sm font-bold transition",
+                              selected ? "border-brand-600 bg-brand-600 text-white shadow-lg shadow-brand-600/20"
+                                : taken ? "cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300"
+                                : "border-slate-200 bg-white text-ink hover:border-brand-400 hover:bg-brand-50"
+                            )}
+                            disabled={taken}
+                            onClick={() => pickSlot(item)}
+                            key={item.start}
+                          >
+                            {formatSlot(item.start, language)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-12 text-center">
+                      <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-400">
+                        <CalendarCheck size={23} />
+                      </div>
+                      <p className="mt-4 text-sm font-extrabold text-ink">{t.noTimes}</p>
+                      <p className="mt-1 text-xs text-slate-500">{t.noTimesHint}</p>
+                    </div>
+                  )}
+                  {allPicked && (
+                    <button className="primary-button mt-6 w-full" onClick={() => { setError(""); setStage("details"); }}>
+                      {t.reviewPackage} <ArrowRight size={17} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {stage === "details" && (
+              <div>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.completeDetails}</h1>
+                {!form ? (
+                  <div className="mt-7 space-y-4">
+                    {Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-20 rounded-xl" key={index} />)}
+                  </div>
+                ) : (
+                  <div className="card mt-7 space-y-5 p-5 sm:p-7">
+                    {form.fields.map((field) => (
+                      <div key={field.id}>
+                        <DynamicField
+                          field={field}
+                          language={language}
+                          value={answers[field.key]}
+                          onChange={(value) => setAnswers((current) => ({ ...current, [field.key]: value }))}
+                        />
+                        {field.type === "email" && (
+                          <label className="mt-5 block">
+                            <span className="label">{t.confirmEmail} <span className="text-brand-600">*</span></span>
+                            <input
+                              className="field"
+                              type="email"
+                              autoComplete="off"
+                              value={confirmEmail}
+                              onChange={(e) => setConfirmEmail(e.target.value)}
+                              onPaste={(e) => e.preventDefault()}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 border-t border-slate-100 pt-5 text-xs font-medium text-slate-500">
+                      <LockKeyhole size={15} className="text-emerald-500" />
+                      Your information is encrypted and automatically removed after the retention period.
+                    </div>
+                    <button className="primary-button w-full" disabled={submitting} onClick={submit}>
+                      {submitting ? <LoaderCircle className="animate-spin" size={18} /> : <Sparkles size={17} />}
+                      {submitting ? t.loading : t.confirmPackage}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </section>
+
+          {/* Summary rail: the full package schedule as it's being built. */}
+          <aside className="lg:sticky lg:top-6">
+            <div className="card p-5">
+              <p className="text-sm font-extrabold text-ink">{t.packageSchedule}</p>
+              <p className="mt-1 text-xs text-slate-500">{pickedCount}/{sessions.length} {t.sessionsLabel}{pkg.priceDisplay ? ` · ${pkg.priceDisplay}` : ""}</p>
+              <div className="mt-4 space-y-2">
+                {sessions.map((session, index) => (
+                  <div className="flex items-start gap-2 text-xs" key={index}>
+                    <span className={clsx("mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold",
+                      session.slot ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400")}>
+                      {session.slot ? <Check size={12} /> : index + 1}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-ink">{localize(session.serviceName, language)}</p>
+                      <p className="text-slate-500">
+                        {session.slot
+                          ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
+                          : t.notPicked}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
         </div>
       </main>
       {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-4 py-6 text-center text-xs leading-5 text-slate-500">

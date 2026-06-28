@@ -8,6 +8,8 @@ import type {
   Center,
   CenterHour,
   ManagedBooking,
+  Package,
+  PackageBookingConfirmation,
   PublicConfig,
   ResourceGroup,
   RetentionJob,
@@ -60,6 +62,26 @@ export async function getServices(centerSlug: string): Promise<Service[]> {
   } catch {
     return demoServices;
   }
+}
+
+export async function getPackages(centerSlug: string): Promise<Package[]> {
+  try {
+    return await request(`/api/public/packages?centerSlug=${encodeURIComponent(centerSlug)}`);
+  } catch {
+    return [];
+  }
+}
+
+export function createPackageBooking(payload: {
+  centerSlug: string;
+  packageSlug: string;
+  language: "en" | "fr";
+  formVersion: number;
+  answers: Record<string, unknown>;
+  sessions: Array<{ serviceSlug: string; start: string }>;
+  turnstileToken?: string;
+}): Promise<PackageBookingConfirmation> {
+  return request("/api/public/package-bookings", { method: "POST", body: JSON.stringify(payload) });
 }
 
 export async function getForm(formId: string): Promise<BookingForm> {
@@ -179,6 +201,14 @@ export const adminApi = {
     request<{ centerIds: string[] }>(`/api/admin/service-centers?serviceId=${encodeURIComponent(serviceId)}`),
   saveServiceCenters: (serviceId: string, centerIds: string[]) =>
     request("/api/admin/service-centers", { method: "PUT", body: JSON.stringify({ serviceId, centerIds }) }),
+
+  // Packages
+  packages: () => request<{ packages: Package[] }>("/api/admin/packages"),
+  createPackage: (payload: Record<string, unknown>) =>
+    request("/api/admin/packages", { method: "POST", body: JSON.stringify(payload) }),
+  updatePackage: (id: string, payload: Record<string, unknown>) =>
+    request(`/api/admin/packages/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deletePackage: (id: string) => request(`/api/admin/packages/${id}`, { method: "DELETE" }),
 
   // Resources & groups
   resources: () => request<{ resources: AdminResource[] }>("/api/admin/resources"),

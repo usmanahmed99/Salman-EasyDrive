@@ -19,6 +19,19 @@ export const bookingRequestSchema = z.object({
   turnstileToken: z.string().optional()
 });
 
+export const packageBookingRequestSchema = z.object({
+  centerSlug: z.string().min(1).max(80),
+  packageSlug: z.string().min(1).max(80),
+  language: z.enum(["en", "fr"]).default("en"),
+  formVersion: z.number().int().positive(),
+  answers: z.record(z.unknown()),
+  sessions: z.array(z.object({
+    serviceSlug: z.string().min(1).max(80),
+    start: z.string().datetime({ offset: true })
+  })).min(1).max(50),
+  turnstileToken: z.string().optional()
+});
+
 export const adminBookingSchema = z.object({
   centerSlug: z.string().min(1).max(80),
   serviceSlug: z.string().min(1).max(80),

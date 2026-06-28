@@ -25,6 +25,7 @@ import {
   LogOut,
   MapPin,
   Menu,
+  Package as PackageIcon,
   Plus,
   RefreshCw,
   Search,
@@ -46,6 +47,7 @@ import type {
   CalendarMapping,
   Center,
   FormField,
+  Package,
   ResourceGroup,
   Service
 } from "../shared/types";
@@ -56,6 +58,7 @@ type AdminSection =
   | "bookings"
   | "centers"
   | "services"
+  | "packages"
   | "resources"
   | "availability"
   | "forms"
@@ -78,6 +81,9 @@ interface AdminBooking {
   instructor?: string;
   status: string;
   calendarLastError?: string;
+  packageBookingId?: string;
+  packageReference?: string;
+  packageName?: string;
 }
 
 const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
@@ -85,6 +91,7 @@ const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard
   { id: "bookings", label: "Bookings", icon: CalendarDays },
   { id: "centers", label: "Centers", icon: MapPin },
   { id: "services", label: "Services", icon: Gauge },
+  { id: "packages", label: "Packages", icon: PackageIcon },
   { id: "resources", label: "Instructors & cars", icon: CarFront },
   { id: "availability", label: "Availability rules", icon: Clock3 },
   { id: "forms", label: "Form builder", icon: FormInput },
@@ -1022,7 +1029,14 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
                   <span className="ml-1.5 text-xs text-slate-400">{booking.date}</span>
                 </td>
                 <td className="px-5 py-4 font-semibold text-ink">{booking.student}</td>
-                <td className="px-5 py-4 text-slate-600">{booking.service}</td>
+                <td className="px-5 py-4 text-slate-600">
+                  {booking.service}
+                  {booking.packageName && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-700" title={`Part of package ${booking.packageReference}`}>
+                      <PackageIcon size={11} /> {booking.packageName}
+                    </span>
+                  )}
+                </td>
                 <td className="px-5 py-4 text-slate-600">{booking.instructor || <span className="text-slate-300">—</span>}</td>
                 <td className="px-5 py-4 text-slate-600">{booking.center}</td>
                 <td className="px-5 py-4 font-mono text-xs text-slate-500">{booking.reference}</td>
@@ -1071,7 +1085,14 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
             <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
               <div className="min-w-0">
                 <dt className="font-bold uppercase tracking-wider text-slate-400">Service</dt>
-                <dd className="mt-1 text-sm leading-5 text-slate-700">{booking.service}</dd>
+                <dd className="mt-1 text-sm leading-5 text-slate-700">
+                  {booking.service}
+                  {booking.packageName && (
+                    <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-700">
+                      <PackageIcon size={11} /> {booking.packageName}
+                    </span>
+                  )}
+                </dd>
               </div>
               <div className="min-w-0">
                 <dt className="font-bold uppercase tracking-wider text-slate-400">Center</dt>
@@ -1639,6 +1660,182 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
       })()}
       {dialog}
     </>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Packages                                                                   */
+/* -------------------------------------------------------------------------- */
+
+function PackagesScreen({ packages, services, reload, toast }: {
+  packages: Package[];
+  services: Service[];
+  reload: () => void;
+  toast: ReturnType<typeof useToast>;
+}) {
+  const [editing, setEditing] = useState<Package | null | "new">(null);
+  const { confirm, dialog } = useConfirm();
+
+  const remove = async (pkg: Package) => {
+    if (!await confirm(`Disable ${pkg.name.en}?`)) return;
+    try {
+      await adminApi.deletePackage(pkg.id);
+      toast.show("success", "Package disabled.");
+      reload();
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    }
+  };
+
+  const itemsLabel = (pkg: Package) =>
+    pkg.items.map((item) => `${item.quantity}× ${item.serviceName.en}`).join(" + ") || "No services";
+
+  return (
+    <>
+      <div className="card overflow-hidden">
+        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+          <p className="text-sm text-slate-500">Bundle several sessions into one bookable package with its own price.</p>
+          <button className="primary-button min-h-10 w-full shrink-0 px-4 py-2 sm:w-auto" onClick={() => setEditing("new")} disabled={services.length === 0}><Plus size={16} /> Add package</button>
+        </div>
+        {services.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">Create at least one service before building a package.</div>
+        ) : packages.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-500">No packages yet.</div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {packages.map((pkg) => (
+              <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:p-5" key={pkg.id}>
+                <div className="hidden h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600 sm:grid"><PackageIcon size={21} /></div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="font-extrabold text-ink">{pkg.name.en}</p>
+                    <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", pkg.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{pkg.enabled ? "Enabled" : "Disabled"}</span>
+                  </div>
+                  <p className="mt-1 break-words text-xs text-slate-500">{pkg.sessionCount} sessions · {pkg.priceDisplay || "no price"} · {pkg.slug}</p>
+                  <p className="mt-1 text-xs text-slate-400">{itemsLabel(pkg)}</p>
+                </div>
+                <div className="flex items-center gap-3 text-xs">
+                  <button className="secondary-button min-h-10 px-4 py-2" onClick={() => setEditing(pkg)}>Edit</button>
+                  <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label={`Disable ${pkg.name.en}`} onClick={() => remove(pkg)}><Trash2 size={15} /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      {editing && (
+        <PackageModal
+          pkg={editing === "new" ? null : editing}
+          services={services}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); toast.show("success", "Package saved."); reload(); }}
+        />
+      )}
+      {dialog}
+    </>
+  );
+}
+
+function PackageModal({ pkg, services, onClose, onSaved }: {
+  pkg: Package | null;
+  services: Service[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [v, setV] = useState({
+    slug: pkg?.slug || "",
+    nameEn: pkg?.name.en || "",
+    nameFr: pkg?.name.fr || "",
+    descriptionEn: pkg?.description.en || "",
+    descriptionFr: pkg?.description.fr || "",
+    priceDisplay: pkg?.priceDisplay || "",
+    priceTaxMode: pkg?.priceTaxMode || "none",
+    enabled: pkg?.enabled ?? true
+  });
+  const [items, setItems] = useState<Array<{ serviceId: string; quantity: number }>>(
+    pkg?.items.map((item) => ({ serviceId: item.serviceId, quantity: item.quantity }))
+      || [{ serviceId: services[0]?.id || "", quantity: 1 }]
+  );
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
+
+  const setItem = (index: number, patch: Partial<{ serviceId: string; quantity: number }>) =>
+    setItems((prev) => prev.map((item, i) => i === index ? { ...item, ...patch } : item));
+  const addItem = () => setItems((prev) => [...prev, { serviceId: services[0]?.id || "", quantity: 1 }]);
+  const removeItem = (index: number) => setItems((prev) => prev.filter((_, i) => i !== index));
+
+  const sessionCount = items.reduce((sum, item) => sum + (item.serviceId ? item.quantity : 0), 0);
+
+  const save = async () => {
+    setError("");
+    const cleaned = items.filter((item) => item.serviceId && item.quantity > 0);
+    if (cleaned.length === 0) { setError("Add at least one service with a quantity."); return; }
+    setSaving(true);
+    const payload = { ...v, slug: v.slug || slugify(v.nameEn), items: cleaned };
+    try {
+      if (pkg) await adminApi.updatePackage(pkg.id, payload);
+      else await adminApi.createPackage(payload);
+      onSaved();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal
+      title={pkg ? `Edit ${pkg.name.en}` : "Add package"}
+      onClose={onClose}
+      footer={<>
+        <button className="secondary-button" onClick={onClose}>Cancel</button>
+        <button className="primary-button" disabled={saving || v.nameEn.length < 2} onClick={save}>{saving && <LoaderCircle className="animate-spin" size={16} />} Save package</button>
+      </>}
+    >
+      {error && <Banner kind="error" message={error} onClose={() => setError("")} />}
+      <div className="grid gap-5 sm:grid-cols-2">
+        <Field label="Name (English)"><input className="field" value={v.nameEn} onChange={(event) => { set("nameEn", event.target.value); if (!pkg && !v.slug) set("slug", slugify(event.target.value)); }} /></Field>
+        <Field label="Name (French)"><input className="field" value={v.nameFr} onChange={(event) => set("nameFr", event.target.value)} /></Field>
+        <label className="block sm:col-span-2"><span className="label">Description (English)</span><textarea className="field" rows={2} value={v.descriptionEn} onChange={(event) => set("descriptionEn", event.target.value)} /></label>
+        <label className="block sm:col-span-2"><span className="label">Description (French)</span><textarea className="field" rows={2} value={v.descriptionFr} onChange={(event) => set("descriptionFr", event.target.value)} /></label>
+        <div className="sm:col-span-2">
+          {pkg
+            ? <ReadonlySlug label="Slug (URL) · locked" value={v.slug} />
+            : <Field label="Slug (URL)"><input className="field" value={v.slug} onChange={(event) => set("slug", slugify(event.target.value))} /></Field>}
+        </div>
+        <Field label="Price (display)"><input className="field" value={v.priceDisplay} onChange={(event) => set("priceDisplay", event.target.value)} placeholder="$350" /></Field>
+        <Field label="Tax note on price">
+          <select className="field" value={v.priceTaxMode} onChange={(event) => set("priceTaxMode", event.target.value)}>
+            <option value="none">No tax note</option>
+            <option value="incl">Tax included</option>
+            <option value="plus">Plus tax</option>
+          </select>
+        </Field>
+        <div className="sm:col-span-2">
+          <span className="label mb-2 block">Sessions in this package</span>
+          <div className="space-y-2">
+            {items.map((item, index) => (
+              <div className="flex items-center gap-2" key={index}>
+                <select className="field flex-1" value={item.serviceId} onChange={(event) => setItem(index, { serviceId: event.target.value })}>
+                  {services.map((service) => <option value={service.id} key={service.id}>{service.name.en}</option>)}
+                </select>
+                <input className="field w-20" type="number" min={1} value={item.quantity} onChange={(event) => setItem(index, { quantity: Math.max(1, Number(event.target.value)) })} />
+                <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label="Remove session" onClick={() => removeItem(index)} disabled={items.length === 1}><Trash2 size={15} /></button>
+              </div>
+            ))}
+          </div>
+          <button className="secondary-button mt-2 min-h-9 px-3 py-1.5 text-xs" onClick={addItem}><Plus size={14} /> Add service</button>
+          <p className="mt-1.5 text-xs text-slate-400">Total: {sessionCount} session{sessionCount === 1 ? "" : "s"}. Each is booked as its own session.</p>
+        </div>
+        <Field label="Status">
+          <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
+            <option value="1">Enabled</option>
+            <option value="0">Disabled</option>
+          </select>
+        </Field>
+      </div>
+    </Modal>
   );
 }
 
@@ -2980,6 +3177,7 @@ export default function AdminPortal() {
   const [overrides, setOverrides] = useState<Array<Record<string, string>>>([]);
   const [centers, setCenters] = useState<Center[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [packages, setPackages] = useState<Package[]>([]);
   const [resources, setResources] = useState<AdminResource[]>([]);
   const [groups, setGroups] = useState<ResourceGroup[]>([]);
   const [forms, setForms] = useState<Array<{ id: string; name: string; active_version: number }>>([]);
@@ -3005,19 +3203,24 @@ export default function AdminPortal() {
     instructor: booking.instructor || undefined,
     status: booking.status,
     start_at: booking.start_at,
-    calendarLastError: booking.calendar_last_error || undefined
+    calendarLastError: booking.calendar_last_error || undefined,
+    packageBookingId: booking.package_booking_id || undefined,
+    packageReference: booking.package_reference || undefined,
+    packageName: booking.package_name || undefined
   } as AdminBooking));
 
   const loadAll = useCallback(async (opts?: { requirements?: boolean }) => {
     setDataLoading(true);
-    const [b, o, c, s, r, g, f, m, conn] = await Promise.allSettled([
+    const [b, o, c, s, r, g, f, m, conn, p] = await Promise.allSettled([
       adminApi.bookings(), adminApi.overrides(), adminApi.centers(), adminApi.services(),
-      adminApi.resources(), adminApi.resourceGroups(), adminApi.forms(), adminApi.calendarMappings(), adminApi.calendarConnections()
+      adminApi.resources(), adminApi.resourceGroups(), adminApi.forms(), adminApi.calendarMappings(), adminApi.calendarConnections(),
+      adminApi.packages()
     ]);
     if (b.status === "fulfilled") setBookings(mapBookings(b.value.bookings));
     if (o.status === "fulfilled") setOverrides(o.value.overrides);
     if (c.status === "fulfilled") setCenters(c.value.centers.map((center) => ({ ...center, enabled: Boolean(center.enabled) })));
     if (s.status === "fulfilled") setServices(s.value.services);
+    if (p.status === "fulfilled") setPackages(p.value.packages);
     if (r.status === "fulfilled") setResources(r.value.resources);
     if (g.status === "fulfilled") setGroups(g.value.groups);
     if (f.status === "fulfilled") setForms(f.value.forms);
@@ -3129,6 +3332,7 @@ export default function AdminPortal() {
     if (section === "bookings") return <BookingsScreen bookings={bookings} centers={centers} services={services} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} reload={loadAll} />;
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
+    if (section === "packages") return <PackagesScreen packages={packages} services={services} reload={loadAll} toast={toast} />;
     if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} centers={centers} reload={loadAll} toast={toast} />;
     if (section === "availability") return <AvailabilityScreen centers={centers} services={services} groups={groups} toast={toast} />;
     if (section === "forms") return <FormBuilderScreen forms={forms} reload={loadAll} toast={toast} />;
