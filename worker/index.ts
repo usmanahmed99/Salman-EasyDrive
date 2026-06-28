@@ -321,7 +321,8 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       const ids = rows.results.map((row) => row.id);
       const items = (await env.DB.prepare(`
         SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
-          services.name_fr AS service_name_fr, services.duration_minutes
+          services.name_fr AS service_name_fr, services.description_en AS service_description_en,
+          services.description_fr AS service_description_fr, services.duration_minutes
         FROM package_items
         JOIN services ON services.id = package_items.service_id
         WHERE package_items.package_id IN (${ids.map(() => "?").join(",")})
@@ -631,7 +632,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     const ids = rows.results.map((row) => row.id);
     const items = (await env.DB.prepare(`
       SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
-        services.name_fr AS service_name_fr, services.duration_minutes
+        services.name_fr AS service_name_fr, services.description_en AS service_description_en,
+        services.description_fr AS service_description_fr, services.duration_minutes
       FROM package_items
       JOIN services ON services.id = package_items.service_id
       WHERE package_items.package_id IN (${ids.map(() => "?").join(",")})

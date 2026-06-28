@@ -40,6 +40,7 @@ export interface PackageItem {
   serviceId: string;
   serviceSlug: string;
   serviceName: LocalizedText;
+  serviceDescription: LocalizedText;
   durationMinutes: number;
   quantity: number;
   sortOrder: number;

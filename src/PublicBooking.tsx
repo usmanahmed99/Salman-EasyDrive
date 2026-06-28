@@ -11,6 +11,7 @@ import {
   Clock3,
   Gauge,
   Home,
+  Info,
   Languages,
   LoaderCircle,
   LockKeyhole,
@@ -19,6 +20,7 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  X,
 } from "lucide-react";
 import { addMonths, eachDayOfInterval, endOfMonth, format, isBefore, isSameDay, isSameMonth, startOfMonth, startOfWeek, endOfWeek, startOfDay } from "date-fns";
 import clsx from "clsx";
@@ -993,6 +995,7 @@ type PackageStage = "schedule" | "details" | "confirmed";
 interface SessionSlot {
   serviceSlug: string;
   serviceName: { en: string; fr: string };
+  serviceDescription: { en: string; fr: string };
   durationMinutes: number;
   slot?: Slot;
 }
@@ -1014,11 +1017,14 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
       Array.from({ length: item.quantity }, () => ({
         serviceSlug: item.serviceSlug,
         serviceName: item.serviceName,
+        serviceDescription: item.serviceDescription,
         durationMinutes: item.durationMinutes
       }))
     )
   );
   const [activeIndex, setActiveIndex] = useState(0);
+  // When set, shows a popup with that session's service name + description.
+  const [descPopup, setDescPopup] = useState<SessionSlot>();
   const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slotLoading, setSlotLoading] = useState(false);
@@ -1225,17 +1231,24 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
             {stage === "schedule" && active && (
               <div>
                 <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseSessionTime}</h1>
-                {/* Session tabs: pick which session you're scheduling. */}
+                {/* Session tabs: pick which session you're scheduling. The info icon opens the
+                    service description in a popup, on demand. */}
                 <div className="mt-5 flex flex-wrap gap-2">
-                  {sessions.map((session, index) => (
-                    <button
+                  {sessions.map((session, index) => {
+                    const hasDescription = Boolean(localize(session.serviceDescription, language).trim());
+                    return (
+                    <div
+                      role="button"
+                      tabIndex={0}
                       className={clsx(
-                        "rounded-xl border px-3 py-2 text-left text-xs font-bold transition",
+                        "relative cursor-pointer rounded-xl border py-2 pl-3 text-left text-xs font-bold transition",
+                        hasDescription ? "pr-8" : "pr-3",
                         index === activeIndex ? "border-brand-600 bg-brand-50 text-brand-700"
                           : session.slot ? "border-emerald-200 bg-emerald-50 text-emerald-700"
                           : "border-slate-200 bg-white text-slate-600 hover:border-brand-300"
                       )}
                       onClick={() => setActiveIndex(index)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveIndex(index); } }}
                       key={index}
                     >
                       <span className="flex items-center gap-1.5">
@@ -1243,10 +1256,23 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                         {localize(session.serviceName, language)}
                       </span>
                       <span className="mt-0.5 block text-[10px] font-medium text-slate-400">
-                        {session.slot ? formatSlot(session.slot.start, language) : t.notPicked}
+                        {session.slot
+                          ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
+                          : t.notPicked}
                       </span>
-                    </button>
-                  ))}
+                      {hasDescription && (
+                        <button
+                          type="button"
+                          className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-slate-400 transition hover:bg-white/70 hover:text-brand-600"
+                          aria-label={`${localize(session.serviceName, language)} — details`}
+                          onClick={(e) => { e.stopPropagation(); setDescPopup(session); }}
+                        >
+                          <Info size={14} />
+                        </button>
+                      )}
+                    </div>
+                    );
+                  })}
                 </div>
 
                 <p className="mt-5 text-sm font-bold text-ink">
@@ -1351,28 +1377,78 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                 )}
               </div>
             )}
+
+            <button
+              className="mt-7 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+              onClick={() => stage === "details" ? setStage("schedule") : onExit()}
+            >
+              <ArrowLeft size={17} /> {t.back}
+            </button>
           </section>
 
-          {/* Summary rail: the full package schedule as it's being built. */}
-          <aside className="lg:sticky lg:top-6">
-            <div className="card p-5">
-              <p className="text-sm font-extrabold text-ink">{t.packageSchedule}</p>
-              <p className="mt-1 text-xs text-slate-500">{pickedCount}/{sessions.length} {t.sessionsLabel}{pkg.priceDisplay ? ` · ${pkg.priceDisplay}` : ""}</p>
-              <div className="mt-4 space-y-2">
-                {sessions.map((session, index) => (
-                  <div className="flex items-start gap-2 text-xs" key={index}>
-                    <span className={clsx("mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full text-[10px] font-bold",
-                      session.slot ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-400")}>
-                      {session.slot ? <Check size={12} /> : index + 1}
-                    </span>
-                    <div className="min-w-0">
-                      <p className="truncate font-bold text-ink">{localize(session.serviceName, language)}</p>
-                      <p className="text-slate-500">
-                        {session.slot
-                          ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
-                          : t.notPicked}
-                      </p>
-                    </div>
+          {/* Summary rail: the full package schedule as it's being built — styled to match ServiceSummary. */}
+          <aside className="card overflow-hidden lg:sticky lg:top-6">
+            <div className="relative overflow-hidden bg-ink p-5 text-white">
+              <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-brand-500/25 blur-2xl" />
+              <div className="relative">
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-200">{t.packageSchedule}</p>
+                <h3 className="mt-3 text-xl font-bold">{localize(pkg.name, language)}</h3>
+                {(() => {
+                  const { price, note } = priceParts(pkg, t);
+                  return price ? (
+                    <p className="mt-1 whitespace-nowrap text-2xl font-extrabold text-white">
+                      {price}{note && <span className="ml-1.5">{note}</span>}
+                    </p>
+                  ) : null;
+                })()}
+                {/* Progress: filled bar + count. */}
+                <div className="mt-4">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/15">
+                    <div className="h-full rounded-full bg-brand-400 transition-all" style={{ width: `${(pickedCount / sessions.length) * 100}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs font-semibold text-slate-300">{pickedCount}/{sessions.length} {t.sessionsLabel}</p>
+                </div>
+              </div>
+            </div>
+            <div className="p-5">
+              <ol className="space-y-1">
+                {sessions.map((session, index) => {
+                  const isActive = index === activeIndex && stage === "schedule";
+                  return (
+                    <li key={index}>
+                      <button
+                        type="button"
+                        onClick={() => { if (stage === "schedule") setActiveIndex(index); }}
+                        className={clsx(
+                          "flex w-full items-start gap-3 rounded-xl p-2.5 text-left transition",
+                          isActive ? "bg-brand-50 ring-1 ring-brand-200" : "hover:bg-slate-50",
+                          stage !== "schedule" && "cursor-default hover:bg-transparent"
+                        )}
+                      >
+                        <span className={clsx(
+                          "mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-bold",
+                          session.slot ? "bg-emerald-100 text-emerald-700" : isActive ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-400"
+                        )}>
+                          {session.slot ? <Check size={13} /> : index + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-bold text-ink">{localize(session.serviceName, language)}</p>
+                          <p className={clsx("mt-0.5 text-xs", session.slot ? "font-semibold text-slate-600" : "text-slate-400")}>
+                            {session.slot
+                              ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
+                              : t.notPicked}
+                          </p>
+                        </div>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                {[t.fastBooking, t.calendarInvite, t.bilingual].map((item) => (
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-600" key={item}>
+                    <CheckCircle2 className="text-emerald-500" size={15} />
+                    {item}
                   </div>
                 ))}
               </div>
@@ -1383,6 +1459,43 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
       {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-4 py-6 text-center text-xs leading-5 text-slate-500">
         © {new Date().getFullYear()} Easy Driving School · Secure booking powered by Cloudflare
       </footer>}
+
+      {/* On-demand service description popup, opened from a session tab's info icon. */}
+      {descPopup && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-0 backdrop-blur-sm sm:items-center sm:p-6"
+          onClick={() => setDescPopup(undefined)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="w-full max-w-md rounded-t-3xl bg-white p-6 shadow-soft sm:rounded-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600"><Gauge size={20} /></div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-ink">{localize(descPopup.serviceName, language)}</h3>
+                  {descPopup.durationMinutes > 0 && (
+                    <p className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-slate-500"><Clock3 size={13} /> {descPopup.durationMinutes} min</p>
+                  )}
+                </div>
+              </div>
+              <button
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-ink"
+                aria-label="Close"
+                onClick={() => setDescPopup(undefined)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-4">
+              <DescriptionMarkdown text={localize(descPopup.serviceDescription, language)} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

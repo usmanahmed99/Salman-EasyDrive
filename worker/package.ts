@@ -26,6 +26,8 @@ interface DbPackageItemRow {
   service_slug: string;
   service_name_en: string;
   service_name_fr: string;
+  service_description_en: string;
+  service_description_fr: string;
   duration_minutes: number;
   quantity: number;
   sort_order: number;
@@ -40,6 +42,7 @@ export function packageResponse(row: DbPackageRow, items: DbPackageItemRow[]): P
       serviceId: item.service_id,
       serviceSlug: item.service_slug,
       serviceName: { en: item.service_name_en, fr: item.service_name_fr },
+      serviceDescription: { en: item.service_description_en || "", fr: item.service_description_fr || "" },
       durationMinutes: item.duration_minutes,
       quantity: item.quantity,
       sortOrder: item.sort_order
@@ -66,7 +69,8 @@ export async function loadPackage(env: Env, slug: string): Promise<Package | nul
   if (!row) return null;
   const items = (await env.DB.prepare(`
     SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
-      services.name_fr AS service_name_fr, services.duration_minutes
+      services.name_fr AS service_name_fr, services.description_en AS service_description_en,
+      services.description_fr AS service_description_fr, services.duration_minutes
     FROM package_items
     JOIN services ON services.id = package_items.service_id
     WHERE package_items.package_id = ?
