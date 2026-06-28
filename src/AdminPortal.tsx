@@ -2209,6 +2209,26 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   const setDefaultOption = (field: FormField, value: string) =>
     updateField(field.id, { defaultValue: field.defaultValue === value ? undefined : value });
 
+  // Map a date/time field's stored defaultValue to its editor mode and back.
+  // Slot mode encodes a signed minute offset as "@slot", "@slot+90", "@slot-30".
+  const dateDefaultMode = (defaultValue: string | undefined): string => {
+    if (!defaultValue) return "";
+    if (defaultValue.startsWith("@slot")) return "@slot";
+    if (defaultValue === "@now") return "@now";
+    return "fixed";
+  };
+  const slotOffsetMinutes = (defaultValue: string | undefined): number =>
+    defaultValue?.startsWith("@slot") ? Number(defaultValue.slice("@slot".length)) || 0 : 0;
+  const setDateDefaultMode = (field: FormField, mode: string) => {
+    if (mode === "@slot") updateField(field.id, { defaultValue: "@slot" });
+    else if (mode === "@now") updateField(field.id, { defaultValue: "@now" });
+    else if (mode === "fixed") updateField(field.id, { defaultValue: field.defaultValue && !field.defaultValue.startsWith("@") ? field.defaultValue : "" });
+    else updateField(field.id, { defaultValue: undefined });
+  };
+  // Persist the slot offset as signed total minutes ("@slot" when zero).
+  const setSlotOffset = (field: FormField, totalMinutes: number) =>
+    updateField(field.id, { defaultValue: totalMinutes === 0 ? "@slot" : `@slot${totalMinutes > 0 ? "+" : ""}${totalMinutes}` });
+
   const changeFieldType = (field: FormField, type: FormField["type"]) => {
     const patch: Partial<FormField> = { type };
     if (fieldNeedsOptions(type) && !(field.options ?? []).length) {
@@ -2394,6 +2414,67 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
                     </div>
                     <button className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 hover:text-brand-700" onClick={() => addOption(field)}><Plus size={14} /> Add option</button>
                     {(field.options ?? []).length === 0 && <p className="mt-2 text-xs text-slate-400">No options yet — add at least one for this field to appear correctly.</p>}
+                  </div>
+                )}
+                {(field.type === "date" || field.type === "time" || field.type === "datetime") && (
+                  <div className="mt-3 border-t border-slate-100 pt-3">
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Default value</p>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <select
+                        className="field py-2 sm:w-64"
+                        value={dateDefaultMode(field.defaultValue)}
+                        onChange={(event) => setDateDefaultMode(field, event.target.value)}
+                      >
+                        <option value="">No default (blank)</option>
+                        <option value="@slot">From selected slot</option>
+                        <option value="@now">Now / next hour</option>
+                        <option value="fixed">Fixed value…</option>
+                      </select>
+                      {dateDefaultMode(field.defaultValue) === "@slot" && (() => {
+                        const total = slotOffsetMinutes(field.defaultValue);
+                        const sign = total < 0 ? -1 : 1;
+                        const hours = Math.floor(Math.abs(total) / 60);
+                        const mins = Math.abs(total) % 60;
+                        return (
+                          <div className="flex items-center gap-2 text-xs font-semibold text-slate-500">
+                            <span>Offset</span>
+                            <input
+                              className="field w-16 py-2"
+                              type="number"
+                              min="0"
+                              value={hours}
+                              onChange={(event) => setSlotOffset(field, sign * ((Number(event.target.value) || 0) * 60 + mins))}
+                            />
+                            <span>h</span>
+                            <input
+                              className="field w-16 py-2"
+                              type="number"
+                              min="0"
+                              max="59"
+                              value={mins}
+                              onChange={(event) => setSlotOffset(field, sign * (hours * 60 + (Number(event.target.value) || 0)))}
+                            />
+                            <span>min</span>
+                            <select
+                              className="field py-2"
+                              value={sign < 0 ? "before" : "after"}
+                              onChange={(event) => setSlotOffset(field, (event.target.value === "before" ? -1 : 1) * (hours * 60 + mins))}
+                            >
+                              <option value="after">after slot</option>
+                              <option value="before">before slot</option>
+                            </select>
+                          </div>
+                        );
+                      })()}
+                      {dateDefaultMode(field.defaultValue) === "fixed" && (
+                        <input
+                          className="field py-2 sm:flex-1"
+                          type={field.type === "datetime" ? "datetime-local" : field.type}
+                          value={field.defaultValue ?? ""}
+                          onChange={(event) => updateField(field.id, { defaultValue: event.target.value || undefined })}
+                        />
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
