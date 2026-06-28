@@ -75,16 +75,19 @@ function wallClockParts(iso: string) {
 
 /**
  * Resolve a date/time field's configured default into the string an input expects.
- * Tokens: "@slot" = the selected slot's start, "@now" = today + next round hour.
- * Any other non-empty value is treated as a literal default. Returns "" if nothing
- * to prefill (e.g. "@slot" with no slot chosen yet).
+ * Tokens: "@slot" = the selected slot's start, optionally offset by minutes via
+ * "@slot+90" or "@slot-30"; "@now" = today + next round hour. Any other non-empty
+ * value is a literal default. Returns "" if nothing to prefill (e.g. "@slot" with
+ * no slot chosen yet).
  */
 function resolveDateDefault(field: FormField, slotStart: string | undefined): string {
   const raw = field.defaultValue;
   if (!raw) return "";
   let iso: string | undefined;
-  if (raw === "@slot") {
-    iso = slotStart;
+  if (raw.startsWith("@slot")) {
+    // Apply the admin-configured minute offset (signed; defaults to 0) to the slot start.
+    const offsetMinutes = Number(raw.slice("@slot".length)) || 0;
+    if (slotStart) iso = new Date(new Date(slotStart).getTime() + offsetMinutes * 60 * 1000).toISOString();
   } else if (raw === "@now") {
     const now = new Date();
     now.setMinutes(0, 0, 0);
