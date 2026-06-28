@@ -1817,10 +1817,10 @@ function PackageModal({ pkg, services, onClose, onSaved }: {
           <div className="space-y-2">
             {items.map((item, index) => (
               <div className="flex items-center gap-2" key={index}>
-                <select className="field flex-1" value={item.serviceId} onChange={(event) => setItem(index, { serviceId: event.target.value })}>
+                <select className="field min-w-0 flex-1" value={item.serviceId} onChange={(event) => setItem(index, { serviceId: event.target.value })}>
                   {services.map((service) => <option value={service.id} key={service.id}>{service.name.en}</option>)}
                 </select>
-                <input className="field w-20" type="number" min={1} value={item.quantity} onChange={(event) => setItem(index, { quantity: Math.max(1, Number(event.target.value)) })} />
+                <input className="field !w-20 shrink-0" type="number" min={1} value={item.quantity} onChange={(event) => setItem(index, { quantity: Math.max(1, Number(event.target.value)) })} />
                 <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label="Remove session" onClick={() => removeItem(index)} disabled={items.length === 1}><Trash2 size={15} /></button>
               </div>
             ))}
@@ -2709,7 +2709,9 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
   const [titleTemplate, setTitleTemplate] = useState("");
   const [descriptionTemplate, setDescriptionTemplate] = useState("");
   const [descriptionTemplateFr, setDescriptionTemplateFr] = useState("");
+  const [notificationEmail, setNotificationEmail] = useState("");
   const [savingTemplate, setSavingTemplate] = useState(false);
+  const [savingNotify, setSavingNotify] = useState(false);
 
   useEffect(() => {
     adminApi.calendarTemplate()
@@ -2717,6 +2719,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
         setTitleTemplate(result.template.title_template || "");
         setDescriptionTemplate(result.template.description_template || "");
         setDescriptionTemplateFr(result.template.description_template_fr || "");
+        setNotificationEmail(result.template.notification_email || "");
       })
       .catch(() => undefined);
     if (connection) {
@@ -2726,19 +2729,40 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
     }
   }, [connection]);
 
+  // The PATCH replaces all settings, so every save sends the current value of each field —
+  // saving the template must not wipe the notification email, and vice versa.
+  const persistSettings = (overrides?: { notificationEmail?: string | null }) =>
+    adminApi.saveCalendarTemplate({
+      titleTemplate: titleTemplate.trim() || null,
+      descriptionTemplate: descriptionTemplate.trim() || null,
+      descriptionTemplateFr: descriptionTemplateFr.trim() || null,
+      notificationEmail: overrides && "notificationEmail" in overrides
+        ? overrides.notificationEmail
+        : (notificationEmail.trim() || null)
+    });
+
   const saveTemplate = async () => {
     setSavingTemplate(true);
     try {
-      await adminApi.saveCalendarTemplate({
-        titleTemplate: titleTemplate.trim() || null,
-        descriptionTemplate: descriptionTemplate.trim() || null,
-        descriptionTemplateFr: descriptionTemplateFr.trim() || null
-      });
+      await persistSettings();
       toast.show("success", "Calendar event template saved.");
     } catch (err) {
       toast.show("error", errorMessage(err));
     } finally {
       setSavingTemplate(false);
+    }
+  };
+
+  const saveNotificationEmail = async () => {
+    setSavingNotify(true);
+    try {
+      const result = await persistSettings({ notificationEmail: notificationEmail.trim() || null });
+      setNotificationEmail(result.template.notification_email || "");
+      toast.show("success", notificationEmail.trim() ? "Booking notifications will be sent to this address." : "Booking notifications turned off.");
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setSavingNotify(false);
     }
   };
 
@@ -2908,6 +2932,38 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
             <div className="flex justify-end">
               <button className="primary-button min-h-10 w-full px-4 py-2 sm:w-auto" disabled={savingTemplate} onClick={saveTemplate}>
                 {savingTemplate && <LoaderCircle className="animate-spin" size={16} />} Save template
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="border-b border-slate-100 p-5">
+            <h2 className="font-extrabold text-ink">Booking notifications</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Add a staff inbox (e.g. info@easydriving.ca) as an attendee on every booking's calendar event,
+              so it receives an invite email for each new booking — public, admin, and every package session.
+              Leave blank to turn notifications off.
+            </p>
+          </div>
+          <div className="space-y-4 p-5">
+            <label className="block">
+              <span className="label">Notification email</span>
+              <input
+                className="field"
+                type="email"
+                value={notificationEmail}
+                onChange={(event) => setNotificationEmail(event.target.value)}
+                placeholder="info@easydriving.ca"
+              />
+            </label>
+            <p className="text-xs text-slate-400">
+              Requires Google Calendar to be connected (invites are sent through it). If calendar sync fails for a
+              booking, no notification is sent for that one.
+            </p>
+            <div className="flex justify-end">
+              <button className="primary-button min-h-10 w-full px-4 py-2 sm:w-auto" disabled={savingNotify} onClick={saveNotificationEmail}>
+                {savingNotify && <LoaderCircle className="animate-spin" size={16} />} Save notifications
               </button>
             </div>
           </div>

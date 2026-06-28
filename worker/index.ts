@@ -801,23 +801,27 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     if (path === "/api/admin/calendar/template") {
       if (method === "GET") {
         const setting = await env.DB.prepare(
-          "SELECT title_template, description_template, description_template_fr, updated_at FROM calendar_event_settings WHERE id='default'"
-        ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; updated_at: string }>();
-        return json({ template: setting || { title_template: null, description_template: null, description_template_fr: null } });
+          "SELECT title_template, description_template, description_template_fr, notification_email, updated_at FROM calendar_event_settings WHERE id='default'"
+        ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; notification_email: string | null; updated_at: string }>();
+        return json({ template: setting || { title_template: null, description_template: null, description_template_fr: null, notification_email: null } });
       }
       if (method === "PATCH") {
-        const body = await readJson(request) as { titleTemplate?: string | null; descriptionTemplate?: string | null; descriptionTemplateFr?: string | null };
+        const body = await readJson(request) as { titleTemplate?: string | null; descriptionTemplate?: string | null; descriptionTemplateFr?: string | null; notificationEmail?: string | null };
         // Empty string clears the override back to the built-in default.
         const title = body.titleTemplate?.trim() ? body.titleTemplate : null;
         const description = body.descriptionTemplate?.trim() ? body.descriptionTemplate : null;
         const descriptionFr = body.descriptionTemplateFr?.trim() ? body.descriptionTemplateFr : null;
+        const notificationEmailRaw = body.notificationEmail?.trim() || null;
+        if (notificationEmailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmailRaw)) {
+          throw new HttpError(400, "Please enter a valid notification email address.", "invalid_email");
+        }
         await env.DB.prepare(`
           UPDATE calendar_event_settings
-          SET title_template=?, description_template=?, description_template_fr=?, updated_by=?, updated_at=CURRENT_TIMESTAMP
+          SET title_template=?, description_template=?, description_template_fr=?, notification_email=?, updated_by=?, updated_at=CURRENT_TIMESTAMP
           WHERE id='default'
-        `).bind(title, description, descriptionFr, user.id).run();
-        await audit(env, user.id, "update", "calendar_event_settings", "default", { title, description, descriptionFr }, request);
-        return json({ template: { title_template: title, description_template: description, description_template_fr: descriptionFr } });
+        `).bind(title, description, descriptionFr, notificationEmailRaw, user.id).run();
+        await audit(env, user.id, "update", "calendar_event_settings", "default", { title, description, descriptionFr, notificationEmail: notificationEmailRaw }, request);
+        return json({ template: { title_template: title, description_template: description, description_template_fr: descriptionFr, notification_email: notificationEmailRaw } });
       }
     }
     if (path === "/api/admin/calendar/mappings" && method === "GET") {

@@ -117,6 +117,8 @@ export async function createCalendarEvent(
     end: string;
     timezone: string;
     attendeeEmail?: string;
+    /** Extra address(es) that should receive the invite (e.g. the staff booking-notification inbox). */
+    notifyEmails?: string[];
     bookingId: string;
     reference: string;
   },
@@ -134,7 +136,16 @@ export async function createCalendarEvent(
         description: event.description,
         start: { dateTime: event.start, timeZone: event.timezone },
         end: { dateTime: event.end, timeZone: event.timezone },
-        attendees: event.attendeeEmail && sendUpdates ? [{ email: event.attendeeEmail }] : undefined,
+        // Attendees only matter when Google should email them (sendUpdates). The student (if any)
+        // plus any staff notification addresses are merged and de-duplicated.
+        attendees: (() => {
+          if (!sendUpdates) return undefined;
+          const emails = [event.attendeeEmail, ...(event.notifyEmails || [])]
+            .map((value) => value?.trim())
+            .filter((value): value is string => Boolean(value));
+          const unique = [...new Set(emails.map((value) => value.toLowerCase()))];
+          return unique.length ? unique.map((email) => ({ email })) : undefined;
+        })(),
         extendedProperties: {
           private: {
             easyDrivingBookingId: event.bookingId,

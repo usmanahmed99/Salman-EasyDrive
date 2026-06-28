@@ -554,8 +554,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     : "";
 
   const template = await env.DB.prepare(
-    "SELECT title_template, description_template, description_template_fr FROM calendar_event_settings WHERE id = 'default'"
-  ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null }>();
+    "SELECT title_template, description_template, description_template_fr, notification_email FROM calendar_event_settings WHERE id = 'default'"
+  ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; notification_email: string | null }>();
 
   const isFr = booking.language === "fr";
   const visibleAnswersFr = form.fields
@@ -633,6 +633,10 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? renderTemplate(activeDescriptionTemplate, fields)
     : defaultDescription;
 
+  // Staff notification inbox (optional): added as an attendee so Google emails it for every
+  // booking — public, admin, and each package session all flow through here.
+  const notifyEmails = template?.notification_email?.trim() ? [template.notification_email.trim()] : undefined;
+
   const canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
     summary,
     description,
@@ -640,6 +644,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     end: booking.end_at,
     timezone: booking.timezone,
     attendeeEmail: booking.student_email || undefined,
+    notifyEmails,
     bookingId,
     reference: booking.reference
   }, true);
