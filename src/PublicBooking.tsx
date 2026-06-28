@@ -707,7 +707,10 @@ export default function PublicBooking() {
         <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
           <section>
             {stage !== "center" && (
-              <button className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-ink" onClick={goBack}>
+              <button
+                className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+                onClick={goBack}
+              >
                 <ArrowLeft size={17} /> {t.back}
               </button>
             )}
@@ -750,7 +753,7 @@ export default function PublicBooking() {
 
             {stage === "service" && (
               <div>
-                <p className="eyebrow">{center?.name}</p>
+                <p className="text-base font-extrabold uppercase tracking-[0.14em] text-brand-600 sm:text-lg">{center?.name}</p>
                 <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseService}</h1>
                 <div className="mt-7 grid gap-3 sm:grid-cols-2">
                   {loading
@@ -901,6 +904,15 @@ export default function PublicBooking() {
                   </div>
                 )}
               </div>
+            )}
+
+            {(stage === "service" || stage === "schedule" || stage === "details") && (
+              <button
+                className="mt-7 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+                onClick={goBack}
+              >
+                <ArrowLeft size={17} /> {t.back}
+              </button>
             )}
           </section>
 
