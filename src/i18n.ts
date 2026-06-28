@@ -39,7 +39,8 @@ export const copy = {
     live: "Live availability",
     requestOnly: "Request only",
     taxIncl: "Tax Incl.",
-    taxPlus: "+ Tax"
+    taxPlus: "+ Tax",
+    backToSite: "Back to main website"
   },
   fr: {
     book: "Réserver",
@@ -79,7 +80,8 @@ export const copy = {
     live: "Disponibilités en direct",
     requestOnly: "Sur demande",
     taxIncl: "Taxes incluses",
-    taxPlus: "+ Taxes"
+    taxPlus: "+ Taxes",
+    backToSite: "Retour au site principal"
   }
 } as const;
 

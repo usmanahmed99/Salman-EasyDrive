@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Clock3,
   Gauge,
+  Home,
   Languages,
   LoaderCircle,
   LockKeyhole,
@@ -594,7 +595,7 @@ export default function PublicBooking() {
             >
               {t.manage} <ArrowRight size={17} />
             </a>
-            <button className="secondary-button" onClick={() => window.location.assign(`/book?lang=${language}`)}>
+            <button className="secondary-button" onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}>
               {t.another}
             </button>
           </div>
@@ -614,6 +615,12 @@ export default function PublicBooking() {
                 <Phone size={16} /> {config.brand.supportPhone}
               </a>
             )}
+            <a
+              className="secondary-button min-h-10 px-3 py-2"
+              href="https://easydriving.ca"
+            >
+              <Home size={17} /> <span className="hidden sm:inline">{t.backToSite}</span>
+            </a>
             <button
               className="secondary-button min-h-10 px-3 py-2"
               onClick={() => {
