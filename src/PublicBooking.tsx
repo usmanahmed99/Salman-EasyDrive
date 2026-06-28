@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   ArrowRight,
@@ -53,12 +53,51 @@ function priceParts(service: Pick<Service, "priceDisplay" | "priceTaxMode">, t: 
   return { price, note: "" };
 }
 
+const PUBLIC_TIMEZONE = "America/Toronto";
+
 function formatSlot(iso: string, language: Language) {
   return new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", {
     hour: "numeric",
     minute: "2-digit",
-    timeZone: "America/Toronto"
+    timeZone: PUBLIC_TIMEZONE
   }).format(new Date(iso));
+}
+
+/** Wall-clock parts (YYYY-MM-DD, HH:mm) of an ISO timestamp in the public timezone. */
+function wallClockParts(iso: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: PUBLIC_TIMEZONE, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+  }).formatToParts(new Date(iso));
+  const v = Object.fromEntries(parts.map((p) => [p.type, p.value]));
+  return { date: `${v.year}-${v.month}-${v.day}`, time: `${v.hour}:${v.minute}` };
+}
+
+/**
+ * Resolve a date/time field's configured default into the string an input expects.
+ * Tokens: "@slot" = the selected slot's start, "@now" = today + next round hour.
+ * Any other non-empty value is treated as a literal default. Returns "" if nothing
+ * to prefill (e.g. "@slot" with no slot chosen yet).
+ */
+function resolveDateDefault(field: FormField, slotStart: string | undefined): string {
+  const raw = field.defaultValue;
+  if (!raw) return "";
+  let iso: string | undefined;
+  if (raw === "@slot") {
+    iso = slotStart;
+  } else if (raw === "@now") {
+    const now = new Date();
+    now.setMinutes(0, 0, 0);
+    now.setHours(now.getHours() + 1);
+    iso = now.toISOString();
+  } else {
+    return raw; // literal fixed value, already in the input's format
+  }
+  if (!iso) return "";
+  const { date, time } = wallClockParts(iso);
+  if (field.type === "date") return date;
+  if (field.type === "time") return time;
+  return `${date}T${time}`; // datetime → datetime-local format
 }
 
 function formatDateLong(date: string, language: Language) {
@@ -425,6 +464,9 @@ export default function PublicBooking() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [confirmation, setConfirmation] = useState<BookingConfirmation>();
+  // Tracks the slot start last applied to @slot-default fields, so changing the
+  // slot re-prefills them — unless the customer has manually edited the value.
+  const lastSlotForDefaults = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     Promise.all([getPublicConfig(), getCenters()]).then(([nextConfig, nextCenters]) => {
@@ -467,18 +509,35 @@ export default function PublicBooking() {
     if (!service?.formId || stage !== "details") return;
     getForm(service.formId).then((loaded) => {
       setForm(loaded);
-      // Seed default selections for select/radio fields not yet answered.
+      // Seed defaults for fields not yet answered: select/radio use defaultValue
+      // verbatim; date/time fields resolve tokens (@slot, @now) or a literal value.
+      // @slot fields also re-prefill when the slot changes, as long as the value
+      // still matches the previously applied slot (i.e. the customer hasn't edited it).
+      const prevSlot = lastSlotForDefaults.current;
       setAnswers((current) => {
         const seeded = { ...current };
         for (const field of loaded.fields) {
-          if (field.defaultValue !== undefined && seeded[field.key] === undefined) {
+          const isDateField = field.type === "date" || field.type === "time" || field.type === "datetime";
+          if (isDateField && field.defaultValue === "@slot") {
+            const prev = resolveDateDefault(field, prevSlot);
+            const untouched = seeded[field.key] === undefined || seeded[field.key] === prev;
+            const next = resolveDateDefault(field, slot?.start);
+            if (untouched && next) seeded[field.key] = next;
+            continue;
+          }
+          if (seeded[field.key] !== undefined) continue;
+          if (isDateField) {
+            const resolved = resolveDateDefault(field, slot?.start);
+            if (resolved) seeded[field.key] = resolved;
+          } else if (field.defaultValue !== undefined) {
             seeded[field.key] = field.defaultValue;
           }
         }
         return seeded;
       });
+      lastSlotForDefaults.current = slot?.start;
     });
-  }, [service, stage]);
+  }, [service, stage, slot]);
 
   const chooseCenter = (nextCenter: Center) => {
     setCenter(nextCenter);

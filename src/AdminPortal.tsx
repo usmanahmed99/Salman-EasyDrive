@@ -2209,6 +2209,18 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
   const setDefaultOption = (field: FormField, value: string) =>
     updateField(field.id, { defaultValue: field.defaultValue === value ? undefined : value });
 
+  // Map a date/time field's stored defaultValue to its editor mode and back.
+  const dateDefaultMode = (defaultValue: string | undefined): string => {
+    if (!defaultValue) return "";
+    if (defaultValue === "@slot" || defaultValue === "@now") return defaultValue;
+    return "fixed";
+  };
+  const setDateDefaultMode = (field: FormField, mode: string) => {
+    if (mode === "@slot" || mode === "@now") updateField(field.id, { defaultValue: mode });
+    else if (mode === "fixed") updateField(field.id, { defaultValue: field.defaultValue && !field.defaultValue.startsWith("@") ? field.defaultValue : "" });
+    else updateField(field.id, { defaultValue: undefined });
+  };
+
   const changeFieldType = (field: FormField, type: FormField["type"]) => {
     const patch: Partial<FormField> = { type };
     if (fieldNeedsOptions(type) && !(field.options ?? []).length) {
@@ -2394,6 +2406,31 @@ function FormBuilderScreen({ forms, reload, toast }: { forms: Array<{ id: string
                     </div>
                     <button className="mt-2 inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 hover:text-brand-700" onClick={() => addOption(field)}><Plus size={14} /> Add option</button>
                     {(field.options ?? []).length === 0 && <p className="mt-2 text-xs text-slate-400">No options yet — add at least one for this field to appear correctly.</p>}
+                  </div>
+                )}
+                {(field.type === "date" || field.type === "time" || field.type === "datetime") && (
+                  <div className="mt-3 border-t border-slate-100 pt-3">
+                    <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Default value</p>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                      <select
+                        className="field py-2 sm:w-64"
+                        value={dateDefaultMode(field.defaultValue)}
+                        onChange={(event) => setDateDefaultMode(field, event.target.value)}
+                      >
+                        <option value="">No default (blank)</option>
+                        <option value="@slot">From selected slot</option>
+                        <option value="@now">Now / next hour</option>
+                        <option value="fixed">Fixed value…</option>
+                      </select>
+                      {dateDefaultMode(field.defaultValue) === "fixed" && (
+                        <input
+                          className="field py-2 sm:flex-1"
+                          type={field.type === "datetime" ? "datetime-local" : field.type}
+                          value={field.defaultValue ?? ""}
+                          onChange={(event) => updateField(field.id, { defaultValue: event.target.value || undefined })}
+                        />
+                      )}
+                    </div>
                   </div>
                 )}
               </div>
