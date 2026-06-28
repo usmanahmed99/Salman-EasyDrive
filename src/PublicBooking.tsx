@@ -454,6 +454,11 @@ export default function PublicBooking() {
   const embedded = query.get("embed") === "1";
   const preselectedCenter = query.get("center");
   const preselectedService = query.get("service");
+  const preselectedPackage = query.get("package");
+  // Service-vs-package picker defaults to services; ?tab=packages opens on the packages tab.
+  const [offerTab, setOfferTab] = useState<"services" | "packages">(
+    query.get("tab") === "packages" ? "packages" : "services"
+  );
   const [config, setConfig] = useState<PublicConfig>();
   const [centers, setCenters] = useState<Center[]>([]);
   const [services, setServices] = useState<Service[]>([]);
@@ -497,14 +502,20 @@ export default function PublicBooking() {
     Promise.all([getServices(center.slug), getPackages(center.slug)]).then(([nextServices, nextPackages]) => {
       setServices(nextServices);
       setPackages(nextPackages);
-      const matched = nextServices.find((item) => item.slug === preselectedService);
-      if (matched) {
-        setService(matched);
-        setStage("schedule");
+      // ?package=<slug> jumps straight into the package flow; ?service=<slug> into scheduling.
+      const matchedPackage = preselectedPackage && nextPackages.find((item) => item.slug === preselectedPackage);
+      if (matchedPackage) {
+        setSelectedPackage(matchedPackage);
+      } else {
+        const matched = nextServices.find((item) => item.slug === preselectedService);
+        if (matched) {
+          setService(matched);
+          setStage("schedule");
+        }
       }
       setLoading(false);
     });
-  }, [center, preselectedService]);
+  }, [center, preselectedService, preselectedPackage]);
 
   useEffect(() => {
     if (!center || !service || stage !== "schedule") return;
@@ -774,11 +785,42 @@ export default function PublicBooking() {
               </div>
             )}
 
-            {stage === "service" && (
+            {stage === "service" && (() => {
+              // Packages and services live under separate tabs. Services is the default; when no
+              // packages exist for this center, the tab bar is hidden and we always show services.
+              const hasPackages = !loading && packages.length > 0;
+              const activeTab = hasPackages ? offerTab : "services";
+              return (
               <div>
                 <p className="text-base font-extrabold uppercase tracking-[0.14em] text-brand-600 sm:text-lg">{center?.name}</p>
                 <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseService}</h1>
-                {!loading && packages.length > 0 && (
+
+                {hasPackages && (
+                  <div className="mt-6 inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1" role="tablist">
+                    {(["services", "packages"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        role="tab"
+                        aria-selected={activeTab === tab}
+                        className={clsx(
+                          "rounded-xl px-5 py-2 text-sm font-bold transition",
+                          activeTab === tab ? "bg-white text-ink shadow-sm" : "text-slate-500 hover:text-ink"
+                        )}
+                        onClick={() => {
+                          setOfferTab(tab);
+                          const url = new URL(window.location.href);
+                          if (tab === "packages") url.searchParams.set("tab", "packages");
+                          else url.searchParams.delete("tab");
+                          window.history.replaceState({}, "", url);
+                        }}
+                      >
+                        {tab === "services" ? t.servicesTab : t.packagesTab}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {activeTab === "packages" ? (
                   <div className="mt-7 grid gap-3 sm:grid-cols-2">
                     {packages.map((pkg) => {
                       const { price, note } = priceParts(pkg, t);
@@ -811,19 +853,28 @@ export default function PublicBooking() {
                       );
                     })}
                   </div>
-                )}
+                ) : (
                 <div className="mt-7 grid gap-3 sm:grid-cols-2">
                   {loading
                     ? Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-44 rounded-2xl" key={index} />)
-                    : services.map((item) => (
+                    : services.map((item) => {
+                        const highlight = localize(item.highlight, language).trim();
+                        return (
                         <button
                           className="card group flex min-h-44 flex-col p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-soft sm:p-5"
                           onClick={() => chooseService(item)}
                           key={item.id}
                         >
                           <div className="flex w-full items-start justify-between gap-4">
-                            <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-50 text-brand-600">
-                              <Gauge size={20} />
+                            <div className="flex items-center gap-2">
+                              <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-50 text-brand-600">
+                                <Gauge size={20} />
+                              </div>
+                              {highlight && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                                  <Star size={11} className="fill-amber-500 text-amber-500" /> {highlight}
+                                </span>
+                              )}
                             </div>
                             {item.priceDisplay && (() => {
                               const { price, note } = priceParts(item, t);
@@ -849,10 +900,13 @@ export default function PublicBooking() {
                             </span>
                           </div>
                         </button>
-                      ))}
+                        );
+                      })}
                 </div>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             {stage === "schedule" && service && (
               <div>

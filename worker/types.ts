@@ -51,5 +51,7 @@ export interface DbService {
   form_id: string;
   base_concurrency: number;
   show_duration: number;
+  highlight_en: string;
+  highlight_fr: string;
   sort_order: number;
 }

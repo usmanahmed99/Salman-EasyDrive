@@ -255,7 +255,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       cancellationCutoff: body.cancellationCutoffHours == null ? null : Number(body.cancellationCutoffHours),
       concurrency: Number(body.baseConcurrency || 1),
       enabled: body.enabled === false ? 0 : 1,
-      showDuration: body.showDuration === false ? 0 : 1
+      showDuration: body.showDuration === false ? 0 : 1,
+      highlightEn: String(body.highlightEn || ""),
+      highlightFr: String(body.highlightFr || "")
     };
     if (!values.slug || !values.nameEn) throw new HttpError(400, "Service name and slug are required.");
     if (method === "POST") {
@@ -267,9 +269,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
           buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display, price_tax_mode,
-          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, nextSortOrder).run();
+          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, highlight_en, highlight_fr, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, nextSortOrder).run();
       // Offer the new service at every existing center by default (mirrors center creation).
       const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
       for (const ctr of allCenters.results) {
@@ -284,8 +286,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         UPDATE services SET name_en=?, name_fr=?, description_en=?, description_fr=?,
         duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
         price_display=?, price_tax_mode=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
+        highlight_en=?, highlight_fr=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, id).run();
+      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }

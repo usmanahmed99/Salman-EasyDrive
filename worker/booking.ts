@@ -737,6 +737,8 @@ export function serviceResponse(service: {
   cutoff_hours: number;
   cancellation_cutoff_hours: number | null;
   show_duration: number;
+  highlight_en?: string;
+  highlight_fr?: string;
   sort_order?: number;
   price_tax_mode?: string;
 }) {
@@ -757,6 +759,10 @@ export function serviceResponse(service: {
     cutoffHours: service.cutoff_hours,
     cancellationCutoffHours: service.cancellation_cutoff_hours || undefined,
     showDuration: service.show_duration !== 0,
+    // Only surface a highlight when at least one language has text (off by default).
+    highlight: (service.highlight_en || service.highlight_fr)
+      ? { en: service.highlight_en || "", fr: service.highlight_fr || "" }
+      : undefined,
     sortOrder: service.sort_order ?? 0
   };
 }

@@ -1379,6 +1379,8 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
     cancellationCutoffHours: service?.cancellationCutoffHours ?? 12,
     baseConcurrency: 4,
     showDuration: service?.showDuration ?? true,
+    highlightEn: service?.highlight?.en || "",
+    highlightFr: service?.highlight?.fr || "",
     enabled: service?.enabled ?? true
   });
   const [reqs, setReqs] = useState<Record<ResourceType, number>>(() => {
@@ -1472,6 +1474,8 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
             <option value="0">Hide duration</option>
           </select>
         </Field>
+        <Field label="Highlight chip · English (optional)"><input className="field" value={v.highlightEn} onChange={(event) => set("highlightEn", event.target.value)} placeholder="e.g. Most popular" /></Field>
+        <Field label="Highlight chip · French (optional)"><input className="field" value={v.highlightFr} onChange={(event) => set("highlightFr", event.target.value)} placeholder="e.g. Le plus populaire" /></Field>
         <div className="sm:col-span-2">
           <span className="label mb-2 block">Resource requirements</span>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

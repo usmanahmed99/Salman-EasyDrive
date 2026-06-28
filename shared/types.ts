@@ -31,6 +31,8 @@ export interface Service {
   cutoffHours: number;
   cancellationCutoffHours?: number;
   showDuration: boolean;
+  /** Optional admin-configured highlight chip (e.g. "Most popular"). Blank = no chip. */
+  highlight?: LocalizedText;
   sortOrder: number;
 }
 
