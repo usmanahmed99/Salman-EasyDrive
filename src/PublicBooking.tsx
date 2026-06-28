@@ -1410,19 +1410,32 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                 </div>
               </div>
             </div>
-            <div className="p-5">
-              <ol className="space-y-1">
+            <div className="space-y-4 p-5">
+              <div className="flex gap-3">
+                <MapPin className="mt-0.5 text-brand-600" size={18} />
+                <div>
+                  <p className="text-sm font-bold text-ink">{center.name}</p>
+                  {center.address && <p className="mt-0.5 text-xs leading-5 text-slate-500">{center.address}</p>}
+                </div>
+              </div>
+              {localize(pkg.description, language) && (
+                <DescriptionMarkdown text={localize(pkg.description, language)} />
+              )}
+              <ol className="space-y-1 border-t border-slate-100 pt-4">
                 {sessions.map((session, index) => {
                   const isActive = index === activeIndex && stage === "schedule";
+                  const hasDescription = Boolean(localize(session.serviceDescription, language).trim());
                   return (
                     <li key={index}>
-                      <button
-                        type="button"
+                      <div
+                        role="button"
+                        tabIndex={0}
                         onClick={() => { if (stage === "schedule") setActiveIndex(index); }}
+                        onKeyDown={(e) => { if (stage === "schedule" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setActiveIndex(index); } }}
                         className={clsx(
                           "flex w-full items-start gap-3 rounded-xl p-2.5 text-left transition",
                           isActive ? "bg-brand-50 ring-1 ring-brand-200" : "hover:bg-slate-50",
-                          stage !== "schedule" && "cursor-default hover:bg-transparent"
+                          stage === "schedule" ? "cursor-pointer" : "cursor-default hover:bg-transparent"
                         )}
                       >
                         <span className={clsx(
@@ -1432,14 +1445,26 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                           {session.slot ? <Check size={13} /> : index + 1}
                         </span>
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-bold text-ink">{localize(session.serviceName, language)}</p>
-                          <p className={clsx("mt-0.5 text-xs", session.slot ? "font-semibold text-slate-600" : "text-slate-400")}>
+                          <p className="flex items-center gap-1 text-xs font-bold text-ink">
+                            <span className="truncate">{localize(session.serviceName, language)}</span>
+                            {hasDescription && (
+                              <button
+                                type="button"
+                                className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-slate-400 transition hover:text-brand-600"
+                                aria-label={`${localize(session.serviceName, language)} — details`}
+                                onClick={(e) => { e.stopPropagation(); setDescPopup(session); }}
+                              >
+                                <Info size={12} />
+                              </button>
+                            )}
+                          </p>
+                          <p className={clsx("mt-0.5 text-[11px]", session.slot ? "font-semibold text-slate-600" : "text-slate-400")}>
                             {session.slot
                               ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
                               : t.notPicked}
                           </p>
                         </div>
-                      </button>
+                      </div>
                     </li>
                   );
                 })}
