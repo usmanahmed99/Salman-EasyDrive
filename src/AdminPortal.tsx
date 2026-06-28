@@ -1667,14 +1667,59 @@ function ServicesScreen({ services, centers, forms, requirements, reload, toast 
 /* Packages                                                                   */
 /* -------------------------------------------------------------------------- */
 
-function PackagesScreen({ packages, services, reload, toast }: {
+function PackagesScreen({ packages, services, centers, reload, toast }: {
   packages: Package[];
   services: Service[];
+  centers: Center[];
   reload: () => void;
   toast: ReturnType<typeof useToast>;
 }) {
   const [editing, setEditing] = useState<Package | null | "new">(null);
+  const [packageCenterIds, setPackageCenterIds] = useState<Record<string, string[]>>({});
   const { confirm, dialog } = useConfirm();
+
+  // Local copy of the order so drag-and-drop feels instant; persisted on drop, then
+  // reloaded from the server (the source of truth) afterwards. Mirrors ServicesScreen.
+  const [ordered, setOrdered] = useState<Package[]>(packages);
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  useEffect(() => { setOrdered(packages); }, [packages]);
+
+  const handleDrop = async (targetId: string) => {
+    const sourceId = dragId;
+    setDragId(null);
+    if (!sourceId || sourceId === targetId) return;
+    const from = ordered.findIndex((p) => p.id === sourceId);
+    const to = ordered.findIndex((p) => p.id === targetId);
+    if (from === -1 || to === -1) return;
+    const next = [...ordered];
+    const [moved] = next.splice(from, 1);
+    next.splice(to, 0, moved);
+    setOrdered(next);
+    setSavingOrder(true);
+    try {
+      await adminApi.reorderPackages(next.map((p) => p.id));
+      toast.show("success", "Package order updated.");
+      reload();
+    } catch (err) {
+      setOrdered(packages); // revert to last known server order
+      toast.show("error", errorMessage(err));
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
+  const loadCenterIds = async (packageId: string): Promise<string[]> => {
+    if (packageCenterIds[packageId] !== undefined) return packageCenterIds[packageId];
+    try {
+      const result = await adminApi.packageCenters(packageId);
+      setPackageCenterIds((prev) => ({ ...prev, [packageId]: result.centerIds }));
+      return result.centerIds;
+    } catch {
+      setPackageCenterIds((prev) => ({ ...prev, [packageId]: [] }));
+      return [];
+    }
+  };
 
   const remove = async (pkg: Package) => {
     if (!await confirm(`Disable ${pkg.name.en}?`)) return;
@@ -1694,51 +1739,90 @@ function PackagesScreen({ packages, services, reload, toast }: {
     <>
       <div className="card overflow-hidden">
         <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-          <p className="text-sm text-slate-500">Bundle several sessions into one bookable package with its own price.</p>
+          <p className="text-sm text-slate-500">Drag to reorder · Bundle several sessions into one bookable package with its own price.</p>
           <button className="primary-button min-h-10 w-full shrink-0 px-4 py-2 sm:w-auto" onClick={() => setEditing("new")} disabled={services.length === 0}><Plus size={16} /> Add package</button>
         </div>
         {services.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">Create at least one service before building a package.</div>
-        ) : packages.length === 0 ? (
+        ) : ordered.length === 0 ? (
           <div className="p-8 text-center text-sm text-slate-500">No packages yet.</div>
         ) : (
           <div className="divide-y divide-slate-100">
-            {packages.map((pkg) => (
-              <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:p-5" key={pkg.id}>
-                <div className="hidden h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600 sm:grid"><PackageIcon size={21} /></div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="font-extrabold text-ink">{pkg.name.en}</p>
-                    <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", pkg.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{pkg.enabled ? "Enabled" : "Disabled"}</span>
+            {ordered.map((pkg) => {
+              const assignedCenters = (packageCenterIds[pkg.id] || [])
+                .map((cid) => centers.find((c) => c.id === cid)?.name)
+                .filter(Boolean);
+              return (
+                <div
+                  className={clsx(
+                    "flex flex-col gap-4 p-4 transition sm:flex-row sm:items-center sm:p-5",
+                    dragId === pkg.id && "opacity-40",
+                    savingOrder && "pointer-events-none"
+                  )}
+                  key={pkg.id}
+                  draggable
+                  onDragStart={() => setDragId(pkg.id)}
+                  onDragEnd={() => setDragId(null)}
+                  onDragOver={(e) => e.preventDefault()}
+                  onDrop={() => handleDrop(pkg.id)}
+                >
+                  <button
+                    className="hidden shrink-0 cursor-grab touch-none text-slate-300 hover:text-slate-500 active:cursor-grabbing sm:grid sm:place-items-center"
+                    aria-label={`Reorder ${pkg.name.en}`}
+                    title="Drag to reorder"
+                  >
+                    <GripVertical size={18} />
+                  </button>
+                  <div className="hidden h-11 w-11 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600 sm:grid"><PackageIcon size={21} /></div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className="font-extrabold text-ink">{pkg.name.en}</p>
+                      <span className={clsx("rounded-full px-2 py-0.5 text-[10px] font-bold", pkg.enabled ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500")}>{pkg.enabled ? "Enabled" : "Disabled"}</span>
+                    </div>
+                    <p className="mt-1 break-words text-xs text-slate-500">{pkg.sessionCount} sessions · {pkg.priceDisplay || "no price"} · {pkg.slug}</p>
+                    <p className="mt-1 text-xs text-slate-400">{itemsLabel(pkg)}</p>
+                    {assignedCenters.length > 0 && (
+                      <p className="mt-1 text-xs text-slate-400">{assignedCenters.join(" · ")}</p>
+                    )}
                   </div>
-                  <p className="mt-1 break-words text-xs text-slate-500">{pkg.sessionCount} sessions · {pkg.priceDisplay || "no price"} · {pkg.slug}</p>
-                  <p className="mt-1 text-xs text-slate-400">{itemsLabel(pkg)}</p>
+                  <div className="flex items-center gap-3 text-xs">
+                    <button className="secondary-button min-h-10 px-4 py-2" onClick={async () => { await loadCenterIds(pkg.id); setEditing(pkg); }}>Edit</button>
+                    <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label={`Disable ${pkg.name.en}`} onClick={() => remove(pkg)}><Trash2 size={15} /></button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3 text-xs">
-                  <button className="secondary-button min-h-10 px-4 py-2" onClick={() => setEditing(pkg)}>Edit</button>
-                  <button className="grid min-h-10 w-10 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label={`Disable ${pkg.name.en}`} onClick={() => remove(pkg)}><Trash2 size={15} /></button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
-      {editing && (
-        <PackageModal
-          pkg={editing === "new" ? null : editing}
-          services={services}
-          onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); toast.show("success", "Package saved."); reload(); }}
-        />
-      )}
+      {editing && (() => {
+        const editingPackage = editing === "new" ? null : editing;
+        return (
+          <PackageModal
+            pkg={editingPackage}
+            services={services}
+            centers={centers}
+            initialCenterIds={editingPackage ? (packageCenterIds[editingPackage.id] || []) : centers.map((c) => c.id)}
+            onClose={() => setEditing(null)}
+            onSaved={() => {
+              if (editingPackage) setPackageCenterIds((prev) => { const next = { ...prev }; delete next[editingPackage.id]; return next; });
+              setEditing(null);
+              toast.show("success", "Package saved.");
+              reload();
+            }}
+          />
+        );
+      })()}
       {dialog}
     </>
   );
 }
 
-function PackageModal({ pkg, services, onClose, onSaved }: {
+function PackageModal({ pkg, services, centers, initialCenterIds, onClose, onSaved }: {
   pkg: Package | null;
   services: Service[];
+  centers: Center[];
+  initialCenterIds: string[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -1756,6 +1840,7 @@ function PackageModal({ pkg, services, onClose, onSaved }: {
     pkg?.items.map((item) => ({ serviceId: item.serviceId, quantity: item.quantity }))
       || [{ serviceId: services[0]?.id || "", quantity: 1 }]
   );
+  const [centerIds, setCenterIds] = useState<string[]>(initialCenterIds);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
@@ -1764,6 +1849,8 @@ function PackageModal({ pkg, services, onClose, onSaved }: {
     setItems((prev) => prev.map((item, i) => i === index ? { ...item, ...patch } : item));
   const addItem = () => setItems((prev) => [...prev, { serviceId: services[0]?.id || "", quantity: 1 }]);
   const removeItem = (index: number) => setItems((prev) => prev.filter((_, i) => i !== index));
+  const toggleCenter = (id: string) =>
+    setCenterIds((prev) => prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]);
 
   const sessionCount = items.reduce((sum, item) => sum + (item.serviceId ? item.quantity : 0), 0);
 
@@ -1774,8 +1861,15 @@ function PackageModal({ pkg, services, onClose, onSaved }: {
     setSaving(true);
     const payload = { ...v, slug: v.slug || slugify(v.nameEn), items: cleaned };
     try {
-      if (pkg) await adminApi.updatePackage(pkg.id, payload);
-      else await adminApi.createPackage(payload);
+      let packageId: string;
+      if (pkg) {
+        await adminApi.updatePackage(pkg.id, payload);
+        packageId = pkg.id;
+      } else {
+        const created = await adminApi.createPackage(payload) as { id: string };
+        packageId = created.id;
+      }
+      await adminApi.savePackageCenters(packageId, centerIds);
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
@@ -1827,6 +1921,23 @@ function PackageModal({ pkg, services, onClose, onSaved }: {
           </div>
           <button className="secondary-button mt-2 min-h-9 px-3 py-1.5 text-xs" onClick={addItem}><Plus size={14} /> Add service</button>
           <p className="mt-1.5 text-xs text-slate-400">Total: {sessionCount} session{sessionCount === 1 ? "" : "s"}. Each is booked as its own session.</p>
+        </div>
+        <div className="sm:col-span-2">
+          <span className="label mb-2 block">Available at centers</span>
+          <div className="flex flex-wrap gap-3">
+            {centers.map((center) => (
+              <label key={center.id} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={centerIds.includes(center.id)}
+                  onChange={() => toggleCenter(center.id)}
+                  className="h-4 w-4 rounded border-slate-300 text-brand-600"
+                />
+                <span className="text-sm text-slate-700">{center.name}</span>
+              </label>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-slate-400">Uncheck a center to hide this package there. Uncheck all to make it available at every center.</p>
         </div>
         <Field label="Status">
           <select className="field" value={v.enabled ? "1" : "0"} onChange={(event) => set("enabled", event.target.value === "1")}>
@@ -3388,7 +3499,7 @@ export default function AdminPortal() {
     if (section === "bookings") return <BookingsScreen bookings={bookings} centers={centers} services={services} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} reload={loadAll} />;
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
-    if (section === "packages") return <PackagesScreen packages={packages} services={services} reload={loadAll} toast={toast} />;
+    if (section === "packages") return <PackagesScreen packages={packages} services={services} centers={centers} reload={loadAll} toast={toast} />;
     if (section === "resources") return <ResourcesScreen resources={resources} groups={groups} centers={centers} reload={loadAll} toast={toast} />;
     if (section === "availability") return <AvailabilityScreen centers={centers} services={services} groups={groups} toast={toast} />;
     if (section === "forms") return <FormBuilderScreen forms={forms} reload={loadAll} toast={toast} />;

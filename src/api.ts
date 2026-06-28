@@ -205,10 +205,16 @@ export const adminApi = {
   // Packages
   packages: () => request<{ packages: Package[] }>("/api/admin/packages"),
   createPackage: (payload: Record<string, unknown>) =>
-    request("/api/admin/packages", { method: "POST", body: JSON.stringify(payload) }),
+    request<{ id: string }>("/api/admin/packages", { method: "POST", body: JSON.stringify(payload) }),
   updatePackage: (id: string, payload: Record<string, unknown>) =>
     request(`/api/admin/packages/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deletePackage: (id: string) => request(`/api/admin/packages/${id}`, { method: "DELETE" }),
+  reorderPackages: (orderedIds: string[]) =>
+    request("/api/admin/packages/reorder", { method: "PUT", body: JSON.stringify({ orderedIds }) }),
+  packageCenters: (packageId: string) =>
+    request<{ centerIds: string[] }>(`/api/admin/package-centers?packageId=${encodeURIComponent(packageId)}`),
+  savePackageCenters: (packageId: string, centerIds: string[]) =>
+    request("/api/admin/package-centers", { method: "PUT", body: JSON.stringify({ packageId, centerIds }) }),
 
   // Resources & groups
   resources: () => request<{ resources: AdminResource[] }>("/api/admin/resources"),

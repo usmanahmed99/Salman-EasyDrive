@@ -296,6 +296,21 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
     }
   }
 
+  // Matched before the generic /api/admin/packages block, since parseId there would treat
+  // "reorder" as the package id.
+  if (path === "/api/admin/packages/reorder" && method === "PUT") {
+    const body = await readJson(request) as { orderedIds?: unknown };
+    const orderedIds = Array.isArray(body.orderedIds) ? body.orderedIds.map(String) : [];
+    if (!orderedIds.length) throw new HttpError(400, "orderedIds is required.");
+    await env.DB.batch(
+      orderedIds.map((packageId, index) =>
+        env.DB.prepare("UPDATE packages SET sort_order=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL").bind(index, packageId)
+      )
+    );
+    await audit(env, user.id, "reorder", "package", "", { orderedIds }, request);
+    return json({ ok: true });
+  }
+
   if (path.startsWith("/api/admin/packages")) {
     const id = parseId(path, "/api/admin/packages");
     if (method === "GET") {
@@ -1044,6 +1059,40 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       }
       await audit(env, user.id, "update", "service_centers", body.serviceId, body, request);
       return json({ serviceId: body.serviceId, centerIds: ids });
+    }
+
+    if (path === "/api/admin/package-centers" && method === "GET") {
+      const packageId = url.searchParams.get("packageId");
+      if (!packageId) throw new HttpError(400, "packageId is required.");
+      const results = await env.DB.prepare(
+        "SELECT center_id, enabled FROM package_centers WHERE package_id=?"
+      ).bind(packageId).all<{ center_id: string; enabled: number }>();
+      const enabled = results.results.filter((r) => r.enabled).map((r) => r.center_id);
+      // No rows = available everywhere; return all active center IDs so UI shows all checked.
+      if (results.results.length === 0) {
+        const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+        return json({ centerIds: allCenters.results.map((c) => c.id), allCenters: true });
+      }
+      return json({ centerIds: enabled });
+    }
+
+    if (path === "/api/admin/package-centers" && method === "PUT") {
+      const body = await readJson(request) as { packageId: string; centerIds: string[] };
+      if (!body.packageId) throw new HttpError(400, "packageId is required.");
+      const ids: string[] = Array.isArray(body.centerIds) ? body.centerIds : [];
+      const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+      const allSelected = allCenters.results.every((c) => ids.includes(c.id));
+      // No rows = available at all centers. Delete all rows when all are checked.
+      await env.DB.prepare("DELETE FROM package_centers WHERE package_id=?").bind(body.packageId).run();
+      if (!allSelected && ids.length > 0) {
+        for (const centerId of ids) {
+          await env.DB.prepare(
+            "INSERT OR IGNORE INTO package_centers(package_id, center_id, enabled) VALUES(?,?,1)"
+          ).bind(body.packageId, centerId).run();
+        }
+      }
+      await audit(env, user.id, "update", "package_centers", body.packageId, body, request);
+      return json({ packageId: body.packageId, centerIds: ids });
     }
 
     return adminCrud(request, env, path, user);
