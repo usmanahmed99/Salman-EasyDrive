@@ -591,6 +591,23 @@ OAuth redirect values must match exactly, including scheme, host, path, and trai
 
 ## 16. Embed or link from easydriving.ca
 
+> A formatted, share-ready version of this section (for non-technical staff) lives at
+> `docs/embedding-guide.pdf` (source: `docs/embedding-guide.html`).
+
+### Query-string parameters
+
+The starting state of `/book` is controlled entirely by URL query-string parameters. Combine them
+freely with `&`; order does not matter.
+
+| Parameter | Values | Effect | Default |
+| --- | --- | --- | --- |
+| `center` | location slug (`laval`, `kirkland`, `henri-bourassa`) | Preselect location, open the service/package picker | location picker |
+| `service` | service slug (e.g. `driving-lesson`) | Preselect a service, jump to date & time | — |
+| `package` | package slug (e.g. `road-test-prep`) | Open the multi-session package flow; **wins over `service`** | — |
+| `tab` | `packages` | Open the picker on the Packages tab (only shown when packages exist) | `services` |
+| `lang` | `fr` / `en` | Interface language | `en` |
+| `embed` | `1` | Hide page header/chrome for iframe embedding | full page |
+
 ### Recommended: direct link
 
 ```html
@@ -605,12 +622,15 @@ Use URL preselection:
 /book?center=laval&service=road-test-package
 /book?center=kirkland&service=car-rental
 /book?center=henri-bourassa&service=driving-lesson
+/book?center=laval&package=road-test-prep          # jump straight into a package
+/book?center=laval&tab=packages                    # open the Packages tab
 ```
 
 French:
 
 ```text
 /book?center=laval&service=road-test-package&lang=fr
+/book?center=laval&package=road-test-prep&lang=fr&tab=packages
 ```
 
 ### Iframe option
@@ -621,18 +641,19 @@ The included Pages content-security policy allows framing by:
 - `https://www.easydriving.ca`;
 - the booking origin itself.
 
-Example:
+Add `embed=1` to hide the header, and combine with any of the parameters above:
 
 ```html
 <iframe
-  src="https://booking.easydriving.ca/book?center=laval&service=car-rental"
+  src="https://booking.easydriving.ca/book?center=laval&tab=packages&embed=1"
   title="Easy Driving booking"
   style="width:100%;min-height:850px;border:0"
   loading="lazy">
 </iframe>
 ```
 
-Test mobile height, keyboard behavior, and scrolling before launch.
+Test mobile height, keyboard behavior, and scrolling before launch. The package flow is taller —
+raise `min-height` if it gets clipped.
 
 ## 17. Optional Cloudflare Turnstile
 
