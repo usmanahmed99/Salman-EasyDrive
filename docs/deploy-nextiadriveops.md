@@ -69,12 +69,19 @@ Why these matter:
 
 ## 2. Apply migrations and seed the remote D1
 
+> **Ongoing migrations are automated.** Every push to `dev` runs
+> `wrangler d1 migrations apply ... --remote` **before** deploying the Worker
+> (see `.github/workflows/deploy-dev.yml`; prod does the same on `master`). So new
+> migration files ship automatically — you do **not** need to run `db:migrate:remote`
+> by hand for normal feature work. The manual commands below are for the **first-time
+> bootstrap** (and the seed, which CI does not run).
+
 The remote database needs its schema **before** any seed. (Seeding first is what produces
 `no such table: centers`.)
 
 ```bash
-npm run db:migrate:remote     # applies 0001_initial.sql + 0002_calendar_event_template.sql
-npm run db:seed:remote        # centers -> services -> forms -> resources
+npm run db:migrate:remote     # applies all migrations/*.sql in order
+npm run db:seed:remote        # centers -> services -> forms -> resources -> packages
 ```
 
 Verify:

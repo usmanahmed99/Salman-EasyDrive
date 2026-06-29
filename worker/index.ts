@@ -1,9 +1,10 @@
-import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, resourceMutationSchema } from "../shared/schemas";
+import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, packageBookingRequestSchema, resourceMutationSchema } from "../shared/schemas";
 import type { BookingForm } from "../shared/types";
 import { validateBookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
+import { confirmPackageBooking, packageResponse, reserveSession, type PackageBookingPayload } from "./package";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
 import { reconcileCalendar } from "./reconcile";
 import type { DbCenter, DbService, Env } from "./types";
@@ -254,7 +255,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       cancellationCutoff: body.cancellationCutoffHours == null ? null : Number(body.cancellationCutoffHours),
       concurrency: Number(body.baseConcurrency || 1),
       enabled: body.enabled === false ? 0 : 1,
-      showDuration: body.showDuration === false ? 0 : 1
+      showDuration: body.showDuration === false ? 0 : 1,
+      highlightEn: String(body.highlightEn || ""),
+      highlightFr: String(body.highlightFr || "")
     };
     if (!values.slug || !values.nameEn) throw new HttpError(400, "Service name and slug are required.");
     if (method === "POST") {
@@ -266,9 +269,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
           buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display, price_tax_mode,
-          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, nextSortOrder).run();
+          form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, highlight_en, highlight_fr, sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, nextSortOrder).run();
       // Offer the new service at every existing center by default (mirrors center creation).
       const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
       for (const ctr of allCenters.results) {
@@ -283,8 +286,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         UPDATE services SET name_en=?, name_fr=?, description_en=?, description_fr=?,
         duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
         price_display=?, price_tax_mode=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
+        highlight_en=?, highlight_fr=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, id).run();
+      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }
@@ -292,6 +296,102 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare("UPDATE services SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
       await audit(env, user.id, "delete", "service", id, {}, request);
       return new Response(null, { status: 204 });
+    }
+  }
+
+  // Matched before the generic /api/admin/packages block, since parseId there would treat
+  // "reorder" as the package id.
+  if (path === "/api/admin/packages/reorder" && method === "PUT") {
+    const body = await readJson(request) as { orderedIds?: unknown };
+    const orderedIds = Array.isArray(body.orderedIds) ? body.orderedIds.map(String) : [];
+    if (!orderedIds.length) throw new HttpError(400, "orderedIds is required.");
+    await env.DB.batch(
+      orderedIds.map((packageId, index) =>
+        env.DB.prepare("UPDATE packages SET sort_order=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL").bind(index, packageId)
+      )
+    );
+    await audit(env, user.id, "reorder", "package", "", { orderedIds }, request);
+    return json({ ok: true });
+  }
+
+  if (path.startsWith("/api/admin/packages")) {
+    const id = parseId(path, "/api/admin/packages");
+    if (method === "GET") {
+      const rows = await env.DB.prepare(
+        "SELECT * FROM packages WHERE deleted_at IS NULL ORDER BY sort_order, name_en"
+      ).all<Parameters<typeof packageResponse>[0]>();
+      if (rows.results.length === 0) return json({ packages: [] });
+      const ids = rows.results.map((row) => row.id);
+      const items = (await env.DB.prepare(`
+        SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
+          services.name_fr AS service_name_fr, services.description_en AS service_description_en,
+          services.description_fr AS service_description_fr, services.duration_minutes
+        FROM package_items
+        JOIN services ON services.id = package_items.service_id
+        WHERE package_items.package_id IN (${ids.map(() => "?").join(",")})
+      `).bind(...ids).all<Parameters<typeof packageResponse>[1][number]>()).results;
+      return json({ packages: rows.results.map((row) => packageResponse(row, items)) });
+    }
+    if (method === "DELETE" && id) {
+      await env.DB.prepare("UPDATE packages SET deleted_at=CURRENT_TIMESTAMP, enabled=0 WHERE id=?").bind(id).run();
+      await audit(env, user.id, "delete", "package", id, {}, request);
+      return new Response(null, { status: 204 });
+    }
+    const body = await readJson(request) as Record<string, unknown>;
+    const values = {
+      slug: String(body.slug || ""),
+      nameEn: String(body.nameEn || ""),
+      nameFr: String(body.nameFr || body.nameEn || ""),
+      descriptionEn: String(body.descriptionEn || ""),
+      descriptionFr: String(body.descriptionFr || ""),
+      price: body.priceDisplay ? String(body.priceDisplay) : null,
+      priceTaxMode: (body.priceTaxMode === "incl" || body.priceTaxMode === "plus") ? body.priceTaxMode : "none",
+      enabled: body.enabled === false ? 0 : 1
+    };
+    // Items: [{ serviceId, quantity }]. Replaced wholesale on every write.
+    const rawItems = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
+    const items = rawItems
+      .map((item) => ({ serviceId: String(item.serviceId || ""), quantity: Math.max(1, Number(item.quantity || 1)) }))
+      .filter((item) => item.serviceId);
+    if (method === "POST") {
+      if (!values.slug || !values.nameEn) throw new HttpError(400, "Package name and slug are required.");
+      if (!items.length) throw new HttpError(400, "A package needs at least one service.");
+      const nextId = uuid();
+      const maxRow = await env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) AS max FROM packages WHERE deleted_at IS NULL").first<{ max: number }>();
+      const statements = [
+        env.DB.prepare(`
+          INSERT INTO packages(id, slug, name_en, name_fr, description_en, description_fr, price_display, price_tax_mode, enabled, sort_order)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.enabled, (maxRow?.max ?? -1) + 1),
+        ...items.map((item, index) => env.DB.prepare(
+          "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order) VALUES (?, ?, ?, ?, ?)"
+        ).bind(uuid(), nextId, item.serviceId, item.quantity, index))
+      ];
+      await env.DB.batch(statements);
+      // Offer the package at every existing center by default (mirrors service creation).
+      const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+      for (const ctr of allCenters.results) {
+        await env.DB.prepare("INSERT OR IGNORE INTO package_centers(package_id, center_id, enabled) VALUES(?,?,1)").bind(nextId, ctr.id).run();
+      }
+      await audit(env, user.id, "create", "package", nextId, body, request);
+      return json({ id: nextId }, 201);
+    }
+    if (method === "PATCH" && id) {
+      if (!values.nameEn) throw new HttpError(400, "Package name is required.");
+      if (!items.length) throw new HttpError(400, "A package needs at least one service.");
+      const statements = [
+        env.DB.prepare(`
+          UPDATE packages SET name_en=?, name_fr=?, description_en=?, description_fr=?,
+          price_display=?, price_tax_mode=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+        `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.enabled, id),
+        env.DB.prepare("DELETE FROM package_items WHERE package_id=?").bind(id),
+        ...items.map((item, index) => env.DB.prepare(
+          "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order) VALUES (?, ?, ?, ?, ?)"
+        ).bind(uuid(), id, item.serviceId, item.quantity, index))
+      ];
+      await env.DB.batch(statements);
+      await audit(env, user.id, "update", "package", id, body, request);
+      return json({ id });
     }
   }
 
@@ -515,6 +615,34 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     `).bind(centerSlug).all<DbService>();
     return json(results.results.map(serviceResponse));
   }
+  if (path === "/api/public/packages" && method === "GET") {
+    const centerSlug = url.searchParams.get("centerSlug");
+    if (!centerSlug) throw new HttpError(400, "centerSlug is required.");
+    // Same center-availability semantics as services: a package_centers row enables it at a center,
+    // and a package with no rows at all is available everywhere.
+    const rows = await env.DB.prepare(`
+      SELECT packages.* FROM packages
+      JOIN centers ON centers.slug=? AND centers.enabled=1
+      WHERE packages.enabled=1 AND packages.deleted_at IS NULL
+        AND (
+          EXISTS (SELECT 1 FROM package_centers WHERE package_centers.package_id=packages.id
+            AND package_centers.center_id=centers.id AND package_centers.enabled=1)
+          OR NOT EXISTS (SELECT 1 FROM package_centers WHERE package_centers.package_id=packages.id)
+        )
+      ORDER BY packages.sort_order, packages.name_en
+    `).bind(centerSlug).all<Parameters<typeof packageResponse>[0]>();
+    if (rows.results.length === 0) return json([]);
+    const ids = rows.results.map((row) => row.id);
+    const items = (await env.DB.prepare(`
+      SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
+        services.name_fr AS service_name_fr, services.description_en AS service_description_en,
+        services.description_fr AS service_description_fr, services.duration_minutes
+      FROM package_items
+      JOIN services ON services.id = package_items.service_id
+      WHERE package_items.package_id IN (${ids.map(() => "?").join(",")})
+    `).bind(...ids).all<Parameters<typeof packageResponse>[1][number]>()).results;
+    return json(rows.results.map((row) => packageResponse(row, items)));
+  }
   if (path.startsWith("/api/public/forms/") && method === "GET") {
     const formId = decodeURIComponent(path.slice("/api/public/forms/".length));
     const row = await env.DB.prepare(`
@@ -554,6 +682,16 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       body: JSON.stringify(payload)
     });
     return new Response(response.body, { status: response.status, headers: { "Content-Type": "application/json" } });
+  }
+  if (path === "/api/public/package-bookings" && method === "POST") {
+    await rateLimit(request, env, 10, 5);
+    const payload = packageBookingRequestSchema.parse(await readJson(request));
+    await verifyTurnstile(request, env, payload.turnstileToken);
+    // Orchestrated in the main worker (not a single DO): a package's sessions can span multiple
+    // dates, so each session is serialized in its own per-date BookingLock during the reserve phase.
+    const { turnstileToken: _t, ...orchestratorPayload } = payload;
+    const result = await confirmPackageBooking(env, orchestratorPayload as PackageBookingPayload);
+    return json(result, 201);
   }
 
   const publicBookingMatch = path.match(/^\/api\/public\/bookings\/([^/]+)\/public$/);
@@ -601,7 +739,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     if (path === "/api/admin/bookings" && method === "GET") {
       const results = await env.DB.prepare(`
         SELECT bookings.id, bookings.reference, bookings.start_at, bookings.created_at, bookings.status,
-          bookings.calendar_last_error,
+          bookings.calendar_last_error, bookings.package_booking_id,
+          package_bookings.reference AS package_reference, packages.name_en AS package_name,
           services.name_en AS service, services.slug AS service_slug,
           centers.name AS center, centers.slug AS center_slug,
           COALESCE(booking_form_responses.student_name, 'Private') AS student,
@@ -614,6 +753,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         FROM bookings JOIN services ON services.id=bookings.service_id
         JOIN centers ON centers.id=bookings.center_id
         LEFT JOIN booking_form_responses ON booking_form_responses.booking_id=bookings.id
+        LEFT JOIN package_bookings ON package_bookings.id=bookings.package_booking_id
+        LEFT JOIN packages ON packages.id=package_bookings.package_id
         ORDER BY bookings.start_at DESC LIMIT 500
       `).all<Record<string, string>>();
       const fmt = new Intl.DateTimeFormat("en-CA", { hour: "numeric", minute: "2-digit", timeZone: "America/Montreal" });
@@ -630,6 +771,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         time: safe(fmt, booking.start_at),
         date: safe(dateFmt, booking.start_at),
         booked_at: safe(bookedFmt, booking.created_at),
+        package_booking_id: booking.package_booking_id || "",
+        package_reference: booking.package_reference || "",
+        package_name: booking.package_name || "",
       })) });
     }
     if (path === "/api/admin/overrides" && method === "GET") {
@@ -677,23 +821,27 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     if (path === "/api/admin/calendar/template") {
       if (method === "GET") {
         const setting = await env.DB.prepare(
-          "SELECT title_template, description_template, description_template_fr, updated_at FROM calendar_event_settings WHERE id='default'"
-        ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; updated_at: string }>();
-        return json({ template: setting || { title_template: null, description_template: null, description_template_fr: null } });
+          "SELECT title_template, description_template, description_template_fr, notification_email, updated_at FROM calendar_event_settings WHERE id='default'"
+        ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; notification_email: string | null; updated_at: string }>();
+        return json({ template: setting || { title_template: null, description_template: null, description_template_fr: null, notification_email: null } });
       }
       if (method === "PATCH") {
-        const body = await readJson(request) as { titleTemplate?: string | null; descriptionTemplate?: string | null; descriptionTemplateFr?: string | null };
+        const body = await readJson(request) as { titleTemplate?: string | null; descriptionTemplate?: string | null; descriptionTemplateFr?: string | null; notificationEmail?: string | null };
         // Empty string clears the override back to the built-in default.
         const title = body.titleTemplate?.trim() ? body.titleTemplate : null;
         const description = body.descriptionTemplate?.trim() ? body.descriptionTemplate : null;
         const descriptionFr = body.descriptionTemplateFr?.trim() ? body.descriptionTemplateFr : null;
+        const notificationEmailRaw = body.notificationEmail?.trim() || null;
+        if (notificationEmailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmailRaw)) {
+          throw new HttpError(400, "Please enter a valid notification email address.", "invalid_email");
+        }
         await env.DB.prepare(`
           UPDATE calendar_event_settings
-          SET title_template=?, description_template=?, description_template_fr=?, updated_by=?, updated_at=CURRENT_TIMESTAMP
+          SET title_template=?, description_template=?, description_template_fr=?, notification_email=?, updated_by=?, updated_at=CURRENT_TIMESTAMP
           WHERE id='default'
-        `).bind(title, description, descriptionFr, user.id).run();
-        await audit(env, user.id, "update", "calendar_event_settings", "default", { title, description, descriptionFr }, request);
-        return json({ template: { title_template: title, description_template: description, description_template_fr: descriptionFr } });
+        `).bind(title, description, descriptionFr, notificationEmailRaw, user.id).run();
+        await audit(env, user.id, "update", "calendar_event_settings", "default", { title, description, descriptionFr, notificationEmail: notificationEmailRaw }, request);
+        return json({ template: { title_template: title, description_template: description, description_template_fr: descriptionFr, notification_email: notificationEmailRaw } });
       }
     }
     if (path === "/api/admin/calendar/mappings" && method === "GET") {
@@ -918,6 +1066,40 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       return json({ serviceId: body.serviceId, centerIds: ids });
     }
 
+    if (path === "/api/admin/package-centers" && method === "GET") {
+      const packageId = url.searchParams.get("packageId");
+      if (!packageId) throw new HttpError(400, "packageId is required.");
+      const results = await env.DB.prepare(
+        "SELECT center_id, enabled FROM package_centers WHERE package_id=?"
+      ).bind(packageId).all<{ center_id: string; enabled: number }>();
+      const enabled = results.results.filter((r) => r.enabled).map((r) => r.center_id);
+      // No rows = available everywhere; return all active center IDs so UI shows all checked.
+      if (results.results.length === 0) {
+        const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+        return json({ centerIds: allCenters.results.map((c) => c.id), allCenters: true });
+      }
+      return json({ centerIds: enabled });
+    }
+
+    if (path === "/api/admin/package-centers" && method === "PUT") {
+      const body = await readJson(request) as { packageId: string; centerIds: string[] };
+      if (!body.packageId) throw new HttpError(400, "packageId is required.");
+      const ids: string[] = Array.isArray(body.centerIds) ? body.centerIds : [];
+      const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
+      const allSelected = allCenters.results.every((c) => ids.includes(c.id));
+      // No rows = available at all centers. Delete all rows when all are checked.
+      await env.DB.prepare("DELETE FROM package_centers WHERE package_id=?").bind(body.packageId).run();
+      if (!allSelected && ids.length > 0) {
+        for (const centerId of ids) {
+          await env.DB.prepare(
+            "INSERT OR IGNORE INTO package_centers(package_id, center_id, enabled) VALUES(?,?,1)"
+          ).bind(body.packageId, centerId).run();
+        }
+      }
+      await audit(env, user.id, "update", "package_centers", body.packageId, body, request);
+      return json({ packageId: body.packageId, centerIds: ids });
+    }
+
     return adminCrud(request, env, path, user);
   }
 
@@ -980,6 +1162,14 @@ export class BookingLock {
         const body = await request.json() as { bookingId: string; start: string };
         const result = await this.state.blockConcurrencyWhile(() => rescheduleAdminBooking(this.env, body.bookingId, body.start));
         return json(result, 200);
+      }
+      if (route === "/package-reserve") {
+        const body = await request.json() as { payload: ConfirmBookingPayload; packageBookingId: string };
+        // reserveSession returns a discriminated result (never throws) so a slot conflict does not
+        // reset the Durable Object. Map a failed reserve to its real HTTP status for the orchestrator.
+        const result = await this.state.blockConcurrencyWhile(() => reserveSession(this.env, body.payload, body.packageBookingId));
+        if (!result.ok) return json({ error: result.error, code: result.code }, result.status);
+        return json(result.session, 201);
       }
       const payload = bookingRequestSchema.parse(await request.json()) as ConfirmBookingPayload;
       const result = await this.state.blockConcurrencyWhile(() => confirmBooking(this.env, payload));

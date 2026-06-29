@@ -8,6 +8,8 @@ import type {
   Center,
   CenterHour,
   ManagedBooking,
+  Package,
+  PackageBookingConfirmation,
   PublicConfig,
   ResourceGroup,
   RetentionJob,
@@ -60,6 +62,26 @@ export async function getServices(centerSlug: string): Promise<Service[]> {
   } catch {
     return demoServices;
   }
+}
+
+export async function getPackages(centerSlug: string): Promise<Package[]> {
+  try {
+    return await request(`/api/public/packages?centerSlug=${encodeURIComponent(centerSlug)}`);
+  } catch {
+    return [];
+  }
+}
+
+export function createPackageBooking(payload: {
+  centerSlug: string;
+  packageSlug: string;
+  language: "en" | "fr";
+  formVersion: number;
+  answers: Record<string, unknown>;
+  sessions: Array<{ serviceSlug: string; start: string }>;
+  turnstileToken?: string;
+}): Promise<PackageBookingConfirmation> {
+  return request("/api/public/package-bookings", { method: "POST", body: JSON.stringify(payload) });
 }
 
 export async function getForm(formId: string): Promise<BookingForm> {
@@ -180,6 +202,20 @@ export const adminApi = {
   saveServiceCenters: (serviceId: string, centerIds: string[]) =>
     request("/api/admin/service-centers", { method: "PUT", body: JSON.stringify({ serviceId, centerIds }) }),
 
+  // Packages
+  packages: () => request<{ packages: Package[] }>("/api/admin/packages"),
+  createPackage: (payload: Record<string, unknown>) =>
+    request<{ id: string }>("/api/admin/packages", { method: "POST", body: JSON.stringify(payload) }),
+  updatePackage: (id: string, payload: Record<string, unknown>) =>
+    request(`/api/admin/packages/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deletePackage: (id: string) => request(`/api/admin/packages/${id}`, { method: "DELETE" }),
+  reorderPackages: (orderedIds: string[]) =>
+    request("/api/admin/packages/reorder", { method: "PUT", body: JSON.stringify({ orderedIds }) }),
+  packageCenters: (packageId: string) =>
+    request<{ centerIds: string[] }>(`/api/admin/package-centers?packageId=${encodeURIComponent(packageId)}`),
+  savePackageCenters: (packageId: string, centerIds: string[]) =>
+    request("/api/admin/package-centers", { method: "PUT", body: JSON.stringify({ packageId, centerIds }) }),
+
   // Resources & groups
   resources: () => request<{ resources: AdminResource[] }>("/api/admin/resources"),
   createResource: (payload: Record<string, unknown>) =>
@@ -218,7 +254,7 @@ export const adminApi = {
     request("/api/admin/calendar/mappings", { method: "POST", body: JSON.stringify(payload) }),
   deleteMapping: (id: string) => request(`/api/admin/calendar/mappings/${id}`, { method: "DELETE" }),
   calendarTemplate: () => request<{ template: CalendarEventTemplate }>("/api/admin/calendar/template"),
-  saveCalendarTemplate: (payload: { titleTemplate: string | null; descriptionTemplate: string | null; descriptionTemplateFr: string | null }) =>
+  saveCalendarTemplate: (payload: { titleTemplate: string | null; descriptionTemplate: string | null; descriptionTemplateFr: string | null; notificationEmail?: string | null }) =>
     request<{ template: CalendarEventTemplate }>("/api/admin/calendar/template", { method: "PATCH", body: JSON.stringify(payload) }),
 
   // Retention

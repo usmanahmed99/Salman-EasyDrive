@@ -11,6 +11,7 @@ import {
   Clock3,
   Gauge,
   Home,
+  Info,
   Languages,
   LoaderCircle,
   LockKeyhole,
@@ -19,17 +20,20 @@ import {
   ShieldCheck,
   Sparkles,
   Star,
+  X,
 } from "lucide-react";
 import { addMonths, eachDayOfInterval, endOfMonth, format, isBefore, isSameDay, isSameMonth, startOfMonth, startOfWeek, endOfWeek, startOfDay } from "date-fns";
 import clsx from "clsx";
 import { copy, getLanguage } from "./i18n";
-import { createBooking, getAvailability, getCenters, getForm, getPublicConfig, getServices } from "./api";
+import { createBooking, createPackageBooking, getAvailability, getCenters, getForm, getPackages, getPublicConfig, getServices } from "./api";
 import type {
   BookingConfirmation,
   BookingForm,
   Center,
   FormField,
   Language,
+  Package,
+  PackageBookingConfirmation,
   PublicConfig,
   Service,
   Slot
@@ -450,11 +454,19 @@ export default function PublicBooking() {
   const embedded = query.get("embed") === "1";
   const preselectedCenter = query.get("center");
   const preselectedService = query.get("service");
+  const preselectedPackage = query.get("package");
+  // Service-vs-package picker defaults to services; ?tab=packages opens on the packages tab.
+  const [offerTab, setOfferTab] = useState<"services" | "packages">(
+    query.get("tab") === "packages" ? "packages" : "services"
+  );
   const [config, setConfig] = useState<PublicConfig>();
   const [centers, setCenters] = useState<Center[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [packages, setPackages] = useState<Package[]>([]);
   const [center, setCenter] = useState<Center>();
   const [service, setService] = useState<Service>();
+  // When set, the service stage hands off to the dedicated multi-session package flow.
+  const [selectedPackage, setSelectedPackage] = useState<Package>();
   const [stage, setStage] = useState<Stage>("center");
   const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -487,16 +499,23 @@ export default function PublicBooking() {
   useEffect(() => {
     if (!center) return;
     setLoading(true);
-    getServices(center.slug).then((nextServices) => {
+    Promise.all([getServices(center.slug), getPackages(center.slug)]).then(([nextServices, nextPackages]) => {
       setServices(nextServices);
-      const matched = nextServices.find((item) => item.slug === preselectedService);
-      if (matched) {
-        setService(matched);
-        setStage("schedule");
+      setPackages(nextPackages);
+      // ?package=<slug> jumps straight into the package flow; ?service=<slug> into scheduling.
+      const matchedPackage = preselectedPackage && nextPackages.find((item) => item.slug === preselectedPackage);
+      if (matchedPackage) {
+        setSelectedPackage(matchedPackage);
+      } else {
+        const matched = nextServices.find((item) => item.slug === preselectedService);
+        if (matched) {
+          setService(matched);
+          setStage("schedule");
+        }
       }
       setLoading(false);
     });
-  }, [center, preselectedService]);
+  }, [center, preselectedService, preselectedPackage]);
 
   useEffect(() => {
     if (!center || !service || stage !== "schedule") return;
@@ -545,6 +564,7 @@ export default function PublicBooking() {
   const chooseCenter = (nextCenter: Center) => {
     setCenter(nextCenter);
     setService(undefined);
+    setSelectedPackage(undefined);
     setSlot(undefined);
     setStage("service");
   };
@@ -666,6 +686,20 @@ export default function PublicBooking() {
     );
   }
 
+  if (selectedPackage && center) {
+    return (
+      <PackageBookingFlow
+        pkg={selectedPackage}
+        center={center}
+        language={language}
+        embedded={embedded}
+        config={config}
+        onLanguage={setLanguage}
+        onExit={() => setSelectedPackage(undefined)}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen overflow-x-hidden">
       {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-3 py-3 backdrop-blur sm:px-6 sm:py-4">
@@ -707,7 +741,10 @@ export default function PublicBooking() {
         <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
           <section>
             {stage !== "center" && (
-              <button className="mb-5 inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-ink" onClick={goBack}>
+              <button
+                className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+                onClick={goBack}
+              >
                 <ArrowLeft size={17} /> {t.back}
               </button>
             )}
@@ -748,22 +785,96 @@ export default function PublicBooking() {
               </div>
             )}
 
-            {stage === "service" && (
+            {stage === "service" && (() => {
+              // Packages and services live under separate tabs. Services is the default; when no
+              // packages exist for this center, the tab bar is hidden and we always show services.
+              const hasPackages = !loading && packages.length > 0;
+              const activeTab = hasPackages ? offerTab : "services";
+              return (
               <div>
-                <p className="eyebrow">{center?.name}</p>
+                <p className="text-base font-extrabold uppercase tracking-[0.14em] text-brand-600 sm:text-lg">{center?.name}</p>
                 <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseService}</h1>
+
+                {hasPackages && (
+                  <div className="mt-6 inline-flex rounded-2xl border border-slate-200 bg-slate-50 p-1" role="tablist">
+                    {(["services", "packages"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        role="tab"
+                        aria-selected={activeTab === tab}
+                        className={clsx(
+                          "rounded-xl px-5 py-2 text-sm font-bold transition",
+                          activeTab === tab ? "bg-white text-ink shadow-sm" : "text-slate-500 hover:text-ink"
+                        )}
+                        onClick={() => {
+                          setOfferTab(tab);
+                          const url = new URL(window.location.href);
+                          if (tab === "packages") url.searchParams.set("tab", "packages");
+                          else url.searchParams.delete("tab");
+                          window.history.replaceState({}, "", url);
+                        }}
+                      >
+                        {tab === "services" ? t.servicesTab : t.packagesTab}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {activeTab === "packages" ? (
+                  <div className="mt-7 grid gap-3 sm:grid-cols-2">
+                    {packages.map((pkg) => {
+                      const { price, note } = priceParts(pkg, t);
+                      return (
+                        <button
+                          className="card group flex min-h-44 flex-col border-brand-200 bg-brand-50/40 p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-300 hover:shadow-soft sm:p-5"
+                          onClick={() => setSelectedPackage(pkg)}
+                          key={pkg.id}
+                        >
+                          <div className="flex w-full items-start justify-between gap-4">
+                            <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-600 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                              <Sparkles size={12} /> {t.packageLabel} · {pkg.sessionCount} {t.sessionsLabel}
+                            </span>
+                            {price && (
+                              <span className="whitespace-nowrap rounded-lg bg-ink px-3 py-1.5 text-sm font-extrabold text-white">
+                                {price}{note && <span className="ml-1">{note}</span>}
+                              </span>
+                            )}
+                          </div>
+                          <h2 className="mt-4 text-lg font-extrabold text-ink">{localize(pkg.name, language)}</h2>
+                          <div className="flex-1">
+                            <DescriptionMarkdown text={localize(pkg.description, language)} />
+                          </div>
+                          <div className="mt-4 flex items-center justify-end text-xs">
+                            <span className="flex items-center gap-1 font-bold text-brand-600">
+                              {t.continue} <ArrowRight size={14} />
+                            </span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
                 <div className="mt-7 grid gap-3 sm:grid-cols-2">
                   {loading
                     ? Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-44 rounded-2xl" key={index} />)
-                    : services.map((item) => (
+                    : services.map((item) => {
+                        const highlight = localize(item.highlight, language).trim();
+                        return (
                         <button
                           className="card group flex min-h-44 flex-col p-4 text-left transition hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-soft sm:p-5"
                           onClick={() => chooseService(item)}
                           key={item.id}
                         >
                           <div className="flex w-full items-start justify-between gap-4">
-                            <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-50 text-brand-600">
-                              <Gauge size={20} />
+                            <div className="flex items-center gap-2">
+                              <div className="grid h-10 w-10 place-items-center rounded-xl bg-brand-50 text-brand-600">
+                                <Gauge size={20} />
+                              </div>
+                              {highlight && (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                                  <Star size={11} className="fill-amber-500 text-amber-500" /> {highlight}
+                                </span>
+                              )}
                             </div>
                             {item.priceDisplay && (() => {
                               const { price, note } = priceParts(item, t);
@@ -789,10 +900,13 @@ export default function PublicBooking() {
                             </span>
                           </div>
                         </button>
-                      ))}
+                        );
+                      })}
                 </div>
+                )}
               </div>
-            )}
+              );
+            })()}
 
             {stage === "schedule" && service && (
               <div>
@@ -902,6 +1016,15 @@ export default function PublicBooking() {
                 )}
               </div>
             )}
+
+            {(stage === "service" || stage === "schedule" || stage === "details") && (
+              <button
+                className="mt-7 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+                onClick={goBack}
+              >
+                <ArrowLeft size={17} /> {t.back}
+              </button>
+            )}
           </section>
 
           <div className={clsx(stage === "center" && "hidden lg:block")}>
@@ -912,6 +1035,571 @@ export default function PublicBooking() {
       {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-4 py-6 text-center text-xs leading-5 text-slate-500">
         © {new Date().getFullYear()} Easy Driving School · Secure booking powered by Cloudflare
       </footer>}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Package booking (multi-session)                                            */
+/* -------------------------------------------------------------------------- */
+
+type PackageStage = "schedule" | "details" | "confirmed";
+
+/** Expands a package's items into a flat, ordered list of one entry per session. */
+interface SessionSlot {
+  serviceSlug: string;
+  serviceName: { en: string; fr: string };
+  serviceDescription: { en: string; fr: string };
+  durationMinutes: number;
+  slot?: Slot;
+}
+
+function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguage, onExit }: {
+  pkg: Package;
+  center: Center;
+  language: Language;
+  embedded: boolean;
+  config?: PublicConfig;
+  onLanguage: (language: Language) => void;
+  onExit: () => void;
+}) {
+  const t = copy[language];
+  const [stage, setStage] = useState<PackageStage>("schedule");
+  // One row per session, in package-item order. Each holds its chosen slot once picked.
+  const [sessions, setSessions] = useState<SessionSlot[]>(() =>
+    pkg.items.flatMap((item) =>
+      Array.from({ length: item.quantity }, () => ({
+        serviceSlug: item.serviceSlug,
+        serviceName: item.serviceName,
+        serviceDescription: item.serviceDescription,
+        durationMinutes: item.durationMinutes
+      }))
+    )
+  );
+  const [activeIndex, setActiveIndex] = useState(0);
+  // When set, shows a popup with that session's service name + description.
+  const [descPopup, setDescPopup] = useState<SessionSlot>();
+  const [date, setDate] = useState(format(new Date(), "yyyy-MM-dd"));
+  const [slots, setSlots] = useState<Slot[]>([]);
+  const [slotLoading, setSlotLoading] = useState(false);
+  const [form, setForm] = useState<BookingForm>();
+  const [answers, setAnswers] = useState<Record<string, unknown>>({});
+  const [confirmEmail, setConfirmEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
+  const [confirmation, setConfirmation] = useState<PackageBookingConfirmation>();
+
+  const active = sessions[activeIndex];
+  const allPicked = sessions.every((session) => session.slot);
+  // The distinct services in the package (order preserved) — each may carry its own form.
+  const serviceSlugs = useMemo(
+    () => [...new Set(sessions.map((session) => session.serviceSlug))],
+    [sessions]
+  );
+
+  // Load availability for the active session's service + date.
+  useEffect(() => {
+    if (stage !== "schedule" || !active) return;
+    setSlotLoading(true);
+    getAvailability(center.slug, active.serviceSlug, date)
+      .then(setSlots)
+      .catch((nextError: Error) => { setSlots([]); setError(nextError.message); })
+      .finally(() => setSlotLoading(false));
+  }, [center.slug, active, date, stage, activeIndex]);
+
+  // Load and MERGE every distinct service's form into one, filled once. Fields are deduped by key
+  // (so shared fields like name/email/phone appear once); a required duplicate wins over optional.
+  // The backend still validates each session against its own service's form, so every merged field
+  // reaches the form that needs it.
+  useEffect(() => {
+    if (stage !== "details" || form || serviceSlugs.length === 0) return;
+    (async () => {
+      const services = await getServices(center.slug);
+      const formIds = [...new Set(
+        serviceSlugs
+          .map((slug) => services.find((item) => item.slug === slug)?.formId)
+          .filter((id): id is string => Boolean(id))
+      )];
+      const forms = await Promise.all(formIds.map((id) => getForm(id)));
+      const byKey = new Map<string, FormField>();
+      for (const loaded of forms) {
+        for (const field of loaded.fields) {
+          const existing = byKey.get(field.key);
+          // Keep the first occurrence, but upgrade to required if any form requires the field.
+          if (!existing) byKey.set(field.key, field);
+          else if (field.required && !existing.required) byKey.set(field.key, { ...existing, required: true });
+        }
+      }
+      const mergedFields = [...byKey.values()];
+      const merged: BookingForm = {
+        id: "package-merged",
+        name: localize(pkg.name, language),
+        version: forms[0]?.version ?? 1,
+        fields: mergedFields
+      };
+      setForm(merged);
+      setAnswers((current) => {
+        const seeded = { ...current };
+        for (const field of mergedFields) {
+          if (seeded[field.key] === undefined && field.defaultValue !== undefined
+            && field.type !== "date" && field.type !== "time" && field.type !== "datetime") {
+            seeded[field.key] = field.defaultValue;
+          }
+        }
+        return seeded;
+      });
+    })().catch((nextError: Error) => setError(nextError.message));
+  }, [stage, serviceSlugs, center.slug, form, pkg.name, language]);
+
+  // Disallow picking a slot already chosen for another session in this package.
+  const isSlotTaken = (start: string, exceptIndex: number) =>
+    sessions.some((session, index) => index !== exceptIndex && session.slot?.start === start);
+
+  // A user may book at most 2 hours of lessons on any single calendar day across the package.
+  // Sum the minutes already committed (by other sessions) on a given local day.
+  const MAX_DAILY_MINUTES = 120;
+  const committedMinutesOnDay = (localDate: string, exceptIndex: number) =>
+    sessions.reduce((sum, session, index) =>
+      index !== exceptIndex && session.slot && wallClockParts(session.slot.start).date === localDate
+        ? sum + session.durationMinutes
+        : sum, 0);
+
+  // True if picking `start` for the active session would exceed the 2h/day cap.
+  const exceedsDailyCap = (start: string) =>
+    committedMinutesOnDay(wallClockParts(start).date, activeIndex) + active.durationMinutes > MAX_DAILY_MINUTES;
+
+  const pickSlot = (slot: Slot) => {
+    setSessions((prev) => prev.map((session, index) => index === activeIndex ? { ...session, slot } : session));
+    // Auto-advance to the next unscheduled session for a smooth flow.
+    const nextUnpicked = sessions.findIndex((session, index) => index !== activeIndex && !session.slot);
+    if (nextUnpicked !== -1) setActiveIndex(nextUnpicked);
+  };
+
+  const submit = async () => {
+    if (!form || !allPicked) return;
+    const missing = form.fields.find((field) => field.required && !answers[field.key]);
+    if (missing) { setError(`${localize(missing.label, language)} — ${t.required}`); return; }
+    const emailField = form.fields.find((f) => f.type === "email");
+    if (emailField) {
+      const emailVal = String(answers[emailField.key] || "");
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) { setError(t.emailInvalid); return; }
+      if (emailVal.toLowerCase() !== confirmEmail.toLowerCase().trim()) { setError(t.emailMismatch); return; }
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const result = await createPackageBooking({
+        centerSlug: center.slug,
+        packageSlug: pkg.slug,
+        language,
+        formVersion: form.version,
+        answers,
+        sessions: sessions.map((session) => ({ serviceSlug: session.serviceSlug, start: session.slot!.start }))
+      });
+      setConfirmation(result);
+      setStage("confirmed");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (nextError) {
+      const message = nextError instanceof Error ? nextError.message : t.packageSessionConflict;
+      setError(message);
+      // On a session conflict, send the customer back to scheduling to re-pick.
+      setStage("schedule");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const Header = () => (
+    <>
+      {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-3 py-3 backdrop-blur sm:px-6 sm:py-4">
+        <div className="mx-auto flex min-w-0 max-w-6xl items-center justify-between gap-3">
+          <Logo />
+          <div className="flex shrink-0 items-center gap-2">
+            {config?.brand.supportPhone && (
+              <a className="hidden items-center gap-2 text-sm font-semibold text-slate-600 hover:text-ink sm:flex" href={`tel:${config.brand.supportPhone}`}>
+                <Phone size={16} /> {config.brand.supportPhone}
+              </a>
+            )}
+            <button className="secondary-button min-h-10 px-3 py-2" onClick={() => onLanguage(language === "en" ? "fr" : "en")}>
+              <Languages size={17} /> {language === "en" ? "FR" : "EN"}
+            </button>
+          </div>
+        </div>
+      </header>}
+    </>
+  );
+
+  if (stage === "confirmed" && confirmation) {
+    return (
+      <div className="min-h-screen overflow-x-hidden bg-white">
+        <Header />
+        <main className="mx-auto max-w-2xl px-4 py-10 sm:px-5 sm:py-16">
+          <div className="text-center">
+            <div className="mx-auto grid h-20 w-20 place-items-center rounded-full bg-emerald-50 text-emerald-600">
+              <CheckCircle2 size={40} />
+            </div>
+            <h1 className="mt-6 text-3xl font-extrabold tracking-tight text-ink">{t.packageSuccessTitle}</h1>
+            <p className="mt-3 text-sm text-slate-600">{t.packageSuccessText}</p>
+            <p className="mt-2 text-xs font-semibold text-slate-400">{t.reference}: {confirmation.reference}</p>
+          </div>
+          <div className="card mt-8 divide-y divide-slate-100 p-2">
+            {confirmation.sessions.map((session, index) => (
+              <div className="flex items-center justify-between gap-4 p-3" key={session.id}>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-bold text-ink">{index + 1}. {session.serviceName}</p>
+                  <p className="text-xs text-slate-500">
+                    {new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", {
+                      weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE
+                    }).format(new Date(session.start))} · {formatSlot(session.start, language)}
+                  </p>
+                </div>
+                <a
+                  className="secondary-button min-h-9 shrink-0 px-3 py-1.5 text-xs"
+                  href={`/booking/${session.reference}?token=${encodeURIComponent(session.manageToken || "")}`}
+                >
+                  {t.manage}
+                </a>
+              </div>
+            ))}
+          </div>
+          <div className="mt-6 flex justify-center">
+            <button className="secondary-button" onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}>
+              {t.another}
+            </button>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  const pickedCount = sessions.filter((session) => session.slot).length;
+
+  return (
+    <div className="min-h-screen overflow-x-hidden">
+      <Header />
+      <main className="mx-auto min-w-0 max-w-6xl px-4 py-6 sm:px-6 sm:py-10">
+        <button
+          className="mb-5 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+          onClick={() => stage === "details" ? setStage("schedule") : onExit()}
+        >
+          <ArrowLeft size={17} /> {t.back}
+        </button>
+
+        {error && (
+          <div className="mb-5 rounded-xl border border-red-100 bg-red-50 p-4 text-sm font-semibold text-red-700" role="alert">
+            {error}
+          </div>
+        )}
+
+        <div className="grid gap-7 lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start">
+          <section>
+            <p className="eyebrow">{localize(pkg.name, language)} · {pkg.sessionCount} {t.sessionsLabel}</p>
+
+            {stage === "schedule" && active && (
+              <div>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.chooseSessionTime}</h1>
+                {/* Session tabs: pick which session you're scheduling. The info icon opens the
+                    service description in a popup, on demand. */}
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {sessions.map((session, index) => {
+                    const hasDescription = Boolean(localize(session.serviceDescription, language).trim());
+                    return (
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className={clsx(
+                        "relative cursor-pointer rounded-xl border py-2 pl-3 text-left text-xs font-bold transition",
+                        hasDescription ? "pr-8" : "pr-3",
+                        // A picked session is always green; the active one gets a heavier ring so it
+                        // still reads as "current" without overriding the picked (green) state — otherwise
+                        // the last-picked session stays blue/active and looks unscheduled.
+                        session.slot ? clsx("border-emerald-300 bg-emerald-50 text-emerald-700", index === activeIndex && "ring-2 ring-emerald-400")
+                          : index === activeIndex ? "border-brand-600 bg-brand-50 text-brand-700"
+                          : "border-slate-200 bg-white text-slate-600 hover:border-brand-300"
+                      )}
+                      onClick={() => setActiveIndex(index)}
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setActiveIndex(index); } }}
+                      key={index}
+                    >
+                      <span className="flex items-center gap-1.5">
+                        {session.slot ? <Check size={13} /> : <span className="grid h-4 w-4 place-items-center rounded-full bg-slate-200 text-[9px] text-slate-600">{index + 1}</span>}
+                        {localize(session.serviceName, language)}
+                      </span>
+                      <span className="mt-0.5 block text-[10px] font-medium text-slate-400">
+                        {session.slot
+                          ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
+                          : t.notPicked}
+                      </span>
+                      {hasDescription && (
+                        <button
+                          type="button"
+                          className="absolute right-1.5 top-1.5 grid h-5 w-5 place-items-center rounded-full text-slate-400 transition hover:bg-white/70 hover:text-brand-600"
+                          aria-label={`${localize(session.serviceName, language)} — details`}
+                          onClick={(e) => { e.stopPropagation(); setDescPopup(session); }}
+                        >
+                          <Info size={14} />
+                        </button>
+                      )}
+                    </div>
+                    );
+                  })}
+                </div>
+
+                <p className="mt-5 text-sm font-bold text-ink">
+                  {t.sessionStep} {activeIndex + 1}/{sessions.length}: {localize(active.serviceName, language)}
+                </p>
+                <div className="card mt-3 p-4">
+                  <MiniCalendar selected={date} onChange={setDate} language={language} />
+                </div>
+                <div className="card mt-5 p-4 sm:p-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-extrabold capitalize text-ink">{formatDateLong(date, language)}</p>
+                      <p className="mt-1 text-xs text-slate-500">{t.availableTimes} · America/Montreal</p>
+                    </div>
+                    <ShieldCheck className="text-emerald-500" size={22} />
+                  </div>
+                  {committedMinutesOnDay(date, activeIndex) + active.durationMinutes > MAX_DAILY_MINUTES && (
+                    <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                      {t.dailyLimitHint}
+                    </p>
+                  )}
+                  {slotLoading ? (
+                    <div className="grid grid-cols-2 gap-3 py-7 sm:grid-cols-3">
+                      {Array.from({ length: 6 }).map((_, index) => <div className="skeleton h-12 rounded-xl" key={index} />)}
+                    </div>
+                  ) : slots.length ? (
+                    <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {slots.map((item) => {
+                        const taken = isSlotTaken(item.start, activeIndex);
+                        const selected = active.slot?.start === item.start;
+                        // Block slots that would push this day past the 2h/day cap (selected slot stays clickable).
+                        const capped = !selected && exceedsDailyCap(item.start);
+                        const disabled = taken || capped;
+                        return (
+                          <button
+                            className={clsx(
+                              "rounded-xl border px-4 py-3 text-sm font-bold transition",
+                              selected ? "border-brand-600 bg-brand-600 text-white shadow-lg shadow-brand-600/20"
+                                : disabled ? "cursor-not-allowed border-slate-100 bg-slate-50 text-slate-300"
+                                : "border-slate-200 bg-white text-ink hover:border-brand-400 hover:bg-brand-50"
+                            )}
+                            disabled={disabled}
+                            title={capped ? t.dailyLimitHint : undefined}
+                            onClick={() => pickSlot(item)}
+                            key={item.start}
+                          >
+                            {formatSlot(item.start, language)}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-12 text-center">
+                      <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-slate-100 text-slate-400">
+                        <CalendarCheck size={23} />
+                      </div>
+                      <p className="mt-4 text-sm font-extrabold text-ink">{t.noTimes}</p>
+                      <p className="mt-1 text-xs text-slate-500">{t.noTimesHint}</p>
+                    </div>
+                  )}
+                  {allPicked && (
+                    <button className="primary-button mt-6 w-full" onClick={() => { setError(""); setStage("details"); }}>
+                      {t.reviewPackage} <ArrowRight size={17} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {stage === "details" && (
+              <div>
+                <h1 className="mt-2 text-[2rem] font-extrabold leading-tight tracking-tight text-ink sm:text-4xl">{t.completeDetails}</h1>
+                {!form ? (
+                  <div className="mt-7 space-y-4">
+                    {Array.from({ length: 4 }).map((_, index) => <div className="skeleton h-20 rounded-xl" key={index} />)}
+                  </div>
+                ) : (
+                  <div className="card mt-7 space-y-5 p-5 sm:p-7">
+                    {form.fields.map((field) => (
+                      <div key={field.id}>
+                        <DynamicField
+                          field={field}
+                          language={language}
+                          value={answers[field.key]}
+                          onChange={(value) => setAnswers((current) => ({ ...current, [field.key]: value }))}
+                        />
+                        {field.type === "email" && (
+                          <label className="mt-5 block">
+                            <span className="label">{t.confirmEmail} <span className="text-brand-600">*</span></span>
+                            <input
+                              className="field"
+                              type="email"
+                              autoComplete="off"
+                              value={confirmEmail}
+                              onChange={(e) => setConfirmEmail(e.target.value)}
+                              onPaste={(e) => e.preventDefault()}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 border-t border-slate-100 pt-5 text-xs font-medium text-slate-500">
+                      <LockKeyhole size={15} className="text-emerald-500" />
+                      Your information is encrypted and automatically removed after the retention period.
+                    </div>
+                    <button className="primary-button w-full" disabled={submitting} onClick={submit}>
+                      {submitting ? <LoaderCircle className="animate-spin" size={18} /> : <Sparkles size={17} />}
+                      {submitting ? t.loading : t.confirmPackage}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button
+              className="mt-7 inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink shadow-sm transition hover:border-brand-300 hover:text-brand-600 hover:shadow"
+              onClick={() => stage === "details" ? setStage("schedule") : onExit()}
+            >
+              <ArrowLeft size={17} /> {t.back}
+            </button>
+          </section>
+
+          {/* Summary rail: the full package schedule as it's being built — styled to match ServiceSummary. */}
+          <aside className="card overflow-hidden lg:sticky lg:top-6">
+            <div className="relative overflow-hidden bg-ink p-5 text-white">
+              <div className="absolute -right-8 -top-8 h-28 w-28 rounded-full bg-brand-500/25 blur-2xl" />
+              <div className="relative">
+                <p className="text-xs font-bold uppercase tracking-[0.16em] text-brand-200">{t.packageSchedule}</p>
+                <h3 className="mt-3 text-xl font-bold">{localize(pkg.name, language)}</h3>
+                {(() => {
+                  const { price, note } = priceParts(pkg, t);
+                  return price ? (
+                    <p className="mt-1 whitespace-nowrap text-2xl font-extrabold text-white">
+                      {price}{note && <span className="ml-1.5">{note}</span>}
+                    </p>
+                  ) : null;
+                })()}
+                {/* Progress: filled bar + count. */}
+                <div className="mt-4">
+                  <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/15">
+                    <div className="h-full rounded-full bg-brand-400 transition-all" style={{ width: `${(pickedCount / sessions.length) * 100}%` }} />
+                  </div>
+                  <p className="mt-2 text-xs font-semibold text-slate-300">{pickedCount}/{sessions.length} {t.sessionsLabel}</p>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-4 p-5">
+              <div className="flex gap-3">
+                <MapPin className="mt-0.5 text-brand-600" size={18} />
+                <div>
+                  <p className="text-sm font-bold text-ink">{center.name}</p>
+                  {center.address && <p className="mt-0.5 text-xs leading-5 text-slate-500">{center.address}</p>}
+                </div>
+              </div>
+              {localize(pkg.description, language) && (
+                <DescriptionMarkdown text={localize(pkg.description, language)} />
+              )}
+              <ol className="space-y-1 border-t border-slate-100 pt-4">
+                {sessions.map((session, index) => {
+                  const isActive = index === activeIndex && stage === "schedule";
+                  const hasDescription = Boolean(localize(session.serviceDescription, language).trim());
+                  return (
+                    <li key={index}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => { if (stage === "schedule") setActiveIndex(index); }}
+                        onKeyDown={(e) => { if (stage === "schedule" && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); setActiveIndex(index); } }}
+                        className={clsx(
+                          "flex w-full items-start gap-3 rounded-xl p-2.5 text-left transition",
+                          isActive ? "bg-brand-50 ring-1 ring-brand-200" : "hover:bg-slate-50",
+                          stage === "schedule" ? "cursor-pointer" : "cursor-default hover:bg-transparent"
+                        )}
+                      >
+                        <span className={clsx(
+                          "mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-bold",
+                          session.slot ? "bg-emerald-100 text-emerald-700" : isActive ? "bg-brand-600 text-white" : "bg-slate-100 text-slate-400"
+                        )}>
+                          {session.slot ? <Check size={13} /> : index + 1}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="flex items-center gap-1 text-xs font-bold text-ink">
+                            <span className="truncate">{localize(session.serviceName, language)}</span>
+                            {hasDescription && (
+                              <button
+                                type="button"
+                                className="grid h-4 w-4 shrink-0 place-items-center rounded-full text-slate-400 transition hover:text-brand-600"
+                                aria-label={`${localize(session.serviceName, language)} — details`}
+                                onClick={(e) => { e.stopPropagation(); setDescPopup(session); }}
+                              >
+                                <Info size={12} />
+                              </button>
+                            )}
+                          </p>
+                          <p className={clsx("mt-0.5 text-[11px]", session.slot ? "font-semibold text-slate-600" : "text-slate-400")}>
+                            {session.slot
+                              ? `${new Intl.DateTimeFormat(language === "fr" ? "fr-CA" : "en-CA", { weekday: "short", month: "short", day: "numeric", timeZone: PUBLIC_TIMEZONE }).format(new Date(session.slot.start))} · ${formatSlot(session.slot.start, language)}`
+                              : t.notPicked}
+                          </p>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ol>
+              <div className="mt-4 border-t border-slate-100 pt-4">
+                {[t.fastBooking, t.calendarInvite, t.bilingual].map((item) => (
+                  <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-600" key={item}>
+                    <CheckCircle2 className="text-emerald-500" size={15} />
+                    {item}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </aside>
+        </div>
+      </main>
+      {!embedded && <footer className="mt-8 border-t border-slate-200 bg-white px-4 py-6 text-center text-xs leading-5 text-slate-500">
+        © {new Date().getFullYear()} Easy Driving School · Secure booking powered by Cloudflare
+      </footer>}
+
+      {/* On-demand service description popup, opened from a session tab's info icon. */}
+      {descPopup && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-ink/50 p-0 backdrop-blur-sm sm:items-center sm:p-6"
+          onClick={() => setDescPopup(undefined)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="w-full max-w-md rounded-t-3xl bg-white p-6 shadow-soft sm:rounded-3xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-brand-50 text-brand-600"><Gauge size={20} /></div>
+                <div>
+                  <h3 className="text-lg font-extrabold text-ink">{localize(descPopup.serviceName, language)}</h3>
+                  {descPopup.durationMinutes > 0 && (
+                    <p className="mt-0.5 flex items-center gap-1 text-xs font-semibold text-slate-500"><Clock3 size={13} /> {descPopup.durationMinutes} min</p>
+                  )}
+                </div>
+              </div>
+              <button
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-slate-400 transition hover:bg-slate-100 hover:text-ink"
+                aria-label="Close"
+                onClick={() => setDescPopup(undefined)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-4">
+              <DescriptionMarkdown text={localize(descPopup.serviceDescription, language)} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

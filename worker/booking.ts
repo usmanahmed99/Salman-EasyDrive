@@ -16,6 +16,8 @@ interface TemplateFields {
   dateTime: string;
   manageUrl: string;
   visibleFields: string;
+  /** For package sessions: the full list of sessions in the package; empty for standalone bookings. */
+  packageSchedule: string;
 }
 
 // Booking start instant → "Mon, Jun 29, 2026, 1:00 p.m." in the center's timezone.
@@ -150,7 +152,28 @@ async function assertNoResourceConflict(
   }
 }
 
-export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
+/**
+ * Validates a slot and builds the INSERT statements for one booking session, without executing
+ * them. Shared by single-booking (`confirmBooking`) and package booking (`reserveSession` in
+ * package.ts). The caller decides the inserted status: 'confirmed' for a standalone booking,
+ * 'pending_confirmation' for a package session held during the all-or-nothing reserve phase.
+ */
+export interface PreparedSession {
+  id: string;
+  reference: string;
+  publicToken: string;
+  end: string;
+  centerName: string;
+  serviceNameEn: string;
+  serviceNameFr: string;
+  statements: D1PreparedStatement[];
+}
+
+export async function prepareSession(
+  env: Env,
+  payload: ConfirmBookingPayload,
+  options: { status: "confirmed" | "pending_confirmation"; packageBookingId?: string }
+): Promise<PreparedSession> {
   const context = await checkExactSlot(env, payload.centerSlug, payload.serviceSlug, payload.start);
   if (!context.slot.available) {
     throw new HttpError(409, "That time was just booked. Please choose another slot.", "booking_conflict");
@@ -173,7 +196,9 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
   `).bind(context.service.form_id).first<{ schema_json: string }>();
   if (!formRow) throw new HttpError(409, "This booking form is not available.", "form_not_found");
   const form = JSON.parse(formRow.schema_json) as BookingForm;
-  if (form.version !== payload.formVersion) {
+  // For package sessions the formVersion is validated once against the package's primary form by
+  // the orchestrator; a per-service stale check would be too strict, so it is skipped (-1 sentinel).
+  if (payload.formVersion !== -1 && form.version !== payload.formVersion) {
     throw new HttpError(409, "The booking form was updated. Please refresh and try again.", "stale_form");
   }
   validateForm(form, payload.answers);
@@ -191,8 +216,8 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
       INSERT INTO bookings(
         id, reference, center_id, service_id, start_at, end_at, operational_start_at,
         operational_end_at, timezone, language, status, form_version,
-        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending')
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, package_booking_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
     `).bind(
       id,
       reference,
@@ -204,10 +229,12 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
       operationalEnd,
       context.center.timezone,
       payload.language,
+      options.status,
       form.version,
       JSON.stringify(form),
       tokenHash,
-      publicToken
+      publicToken,
+      options.packageBookingId ?? null
     ),
     env.DB.prepare(`
       INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
@@ -233,7 +260,23 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
       `).bind(uuid(), id, requirement.groupId, Number(allocation) || requirement.units, operationalStart, operationalEnd));
     }
   }
-  await env.DB.batch(statements);
+
+  return {
+    id,
+    reference,
+    publicToken,
+    end,
+    centerName: context.center.name,
+    serviceNameEn: context.service.name_en,
+    serviceNameFr: context.service.name_fr,
+    statements
+  };
+}
+
+export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
+  const session = await prepareSession(env, payload, { status: "confirmed" });
+  const { id, reference, publicToken, end } = session;
+  await env.DB.batch(session.statements);
 
   const sync = await syncBookingCalendar(env, id, publicToken).catch(async (error: unknown) => {
     const message = error instanceof Error ? error.message : "Calendar sync failed";
@@ -250,8 +293,8 @@ export async function confirmBooking(env: Env, payload: ConfirmBookingPayload) {
     status: sync.status === "failed" ? "calendar_sync_failed" : "confirmed",
     start: payload.start,
     end,
-    centerName: context.center.name,
-    serviceName: payload.language === "fr" ? context.service.name_fr : context.service.name_en,
+    centerName: session.centerName,
+    serviceName: payload.language === "fr" ? session.serviceNameFr : session.serviceNameEn,
     calendarSyncStatus: sync.status,
     manageToken: publicToken
   };
@@ -511,8 +554,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     : "";
 
   const template = await env.DB.prepare(
-    "SELECT title_template, description_template, description_template_fr FROM calendar_event_settings WHERE id = 'default'"
-  ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null }>();
+    "SELECT title_template, description_template, description_template_fr, notification_email FROM calendar_event_settings WHERE id = 'default'"
+  ).first<{ title_template: string | null; description_template: string | null; description_template_fr: string | null; notification_email: string | null }>();
 
   const isFr = booking.language === "fr";
   const visibleAnswersFr = form.fields
@@ -531,6 +574,25 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? `${booking.duration_minutes} min`
     : "";
 
+  // For a package session, list every session in the package so each invite shows the full plan.
+  let packageSchedule = "";
+  if (booking.package_booking_id) {
+    const siblings = (await env.DB.prepare(`
+      SELECT bookings.start_at, services.name_en, services.name_fr
+      FROM bookings JOIN services ON services.id = bookings.service_id
+      WHERE bookings.package_booking_id = ?
+        AND bookings.status IN ('confirmed', 'pending_confirmation', 'calendar_sync_failed')
+      ORDER BY bookings.start_at
+    `).bind(booking.package_booking_id).all<{ start_at: string; name_en: string; name_fr: string }>()).results;
+    if (siblings.length) {
+      const header = isFr ? "Calendrier du forfait :" : "Package schedule:";
+      packageSchedule = [header, ...siblings.map((sibling, index) => {
+        const serviceName = isFr ? (sibling.name_fr || sibling.name_en) : sibling.name_en;
+        return `${index + 1}. ${serviceName} — ${formatBookingDateTime(sibling.start_at, booking.timezone, isFr)}`;
+      })].join("\n");
+    }
+  }
+
   const fields: TemplateFields = {
     service: isFr ? (booking.name_fr || booking.name_en) : booking.name_en,
     serviceDescription: isFr ? (booking.description_fr || booking.description_en || "") : (booking.description_en || ""),
@@ -541,7 +603,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     duration: durationLabel,
     dateTime: formatBookingDateTime(booking.start_at, booking.timezone, isFr),
     manageUrl,
-    visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n")
+    visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n"),
+    packageSchedule
   };
 
   // Defaults are intentionally good on their own; templates only override when set.
@@ -555,6 +618,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     fields.price ? `Price: ${fields.price}` : "",
     `Center: ${fields.center}`,
     fields.visibleFields,
+    fields.packageSchedule ? `\n${fields.packageSchedule}` : "",
     manageUrl ? `Manage or cancel: ${manageUrl}` : ""
   ].filter(Boolean).join("\n");
 
@@ -569,6 +633,10 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? renderTemplate(activeDescriptionTemplate, fields)
     : defaultDescription;
 
+  // Staff notification inbox (optional): added as an attendee so Google emails it for every
+  // booking — public, admin, and each package session all flow through here.
+  const notifyEmails = template?.notification_email?.trim() ? [template.notification_email.trim()] : undefined;
+
   const canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
     summary,
     description,
@@ -576,6 +644,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     end: booking.end_at,
     timezone: booking.timezone,
     attendeeEmail: booking.student_email || undefined,
+    notifyEmails,
     bookingId,
     reference: booking.reference
   }, true);
@@ -668,6 +737,8 @@ export function serviceResponse(service: {
   cutoff_hours: number;
   cancellation_cutoff_hours: number | null;
   show_duration: number;
+  highlight_en?: string;
+  highlight_fr?: string;
   sort_order?: number;
   price_tax_mode?: string;
 }) {
@@ -688,6 +759,10 @@ export function serviceResponse(service: {
     cutoffHours: service.cutoff_hours,
     cancellationCutoffHours: service.cancellation_cutoff_hours || undefined,
     showDuration: service.show_duration !== 0,
+    // Only surface a highlight when at least one language has text (off by default).
+    highlight: (service.highlight_en || service.highlight_fr)
+      ? { en: service.highlight_en || "", fr: service.highlight_fr || "" }
+      : undefined,
     sortOrder: service.sort_order ?? 0
   };
 }

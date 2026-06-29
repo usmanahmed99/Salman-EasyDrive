@@ -31,7 +31,36 @@ export interface Service {
   cutoffHours: number;
   cancellationCutoffHours?: number;
   showDuration: boolean;
+  /** Optional admin-configured highlight chip (e.g. "Most popular"). Blank = no chip. */
+  highlight?: LocalizedText;
   sortOrder: number;
+}
+
+/** A line item in a package: how many sessions of a given service. */
+export interface PackageItem {
+  id: string;
+  serviceId: string;
+  serviceSlug: string;
+  serviceName: LocalizedText;
+  serviceDescription: LocalizedText;
+  durationMinutes: number;
+  quantity: number;
+  sortOrder: number;
+}
+
+/** An admin-defined bundle of sessions across one or more services. */
+export interface Package {
+  id: string;
+  slug: string;
+  name: LocalizedText;
+  description: LocalizedText;
+  priceDisplay?: string;
+  priceTaxMode: "none" | "incl" | "plus";
+  enabled: boolean;
+  sortOrder: number;
+  items: PackageItem[];
+  /** Total number of sessions (sum of item quantities). */
+  sessionCount: number;
 }
 
 export type FormFieldType =
@@ -134,6 +163,14 @@ export interface BookingConfirmation {
   calendarSyncStatus: "pending" | "synced" | "failed";
 }
 
+/** Result of booking a package: the parent reference plus each per-session booking. */
+export interface PackageBookingConfirmation {
+  reference: string;
+  packageName: string;
+  manageToken?: string;
+  sessions: BookingConfirmation[];
+}
+
 export interface AdminResource {
   id: string;
   group_id: string;
@@ -175,6 +212,8 @@ export interface CalendarEventTemplate {
   title_template: string | null;
   description_template: string | null;
   description_template_fr: string | null;
+  /** Optional staff inbox that receives a calendar invite for every new booking. */
+  notification_email: string | null;
   updated_at?: string;
 }
 
