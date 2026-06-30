@@ -673,7 +673,7 @@ export default function PublicBooking() {
           <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <a
               className="primary-button"
-              href={`/booking/${confirmation.reference}?token=${encodeURIComponent(confirmation.manageToken || "")}`}
+              href={`/booking/${confirmation.reference}?token=${encodeURIComponent(confirmation.manageToken || "")}${embedded ? "&embed=1" : ""}`}
             >
               {t.manage} <ArrowRight size={17} />
             </a>
@@ -1255,7 +1255,7 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                 </div>
                 <a
                   className="secondary-button min-h-9 shrink-0 px-3 py-1.5 text-xs"
-                  href={`/booking/${session.reference}?token=${encodeURIComponent(session.manageToken || "")}`}
+                  href={`/booking/${session.reference}?token=${encodeURIComponent(session.manageToken || "")}${embedded ? "&embed=1" : ""}`}
                 >
                   {t.manage}
                 </a>

@@ -56,7 +56,10 @@ export default function ManageBooking() {
   const language: Language = getLanguage();
   const t = text[language];
   const reference = decodeURIComponent(window.location.pathname.split("/booking/")[1] || "");
-  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const params = new URLSearchParams(window.location.search);
+  const token = params.get("token") || "";
+  const embedded = params.get("embed") === "1";
+  const bookHref = `/book?lang=${language}${embedded ? "&embed=1" : ""}`;
 
   const [booking, setBooking] = useState<ManagedBooking | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,11 +100,11 @@ export default function ManageBooking() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <header className="border-b border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur sm:px-6">
-        <a className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-ink" href={`/book?lang=${language}`}>
+      {!embedded && <header className="border-b border-slate-200/70 bg-white/90 px-4 py-4 backdrop-blur sm:px-6">
+        <a className="inline-flex items-center gap-2 text-sm font-bold text-slate-500 hover:text-ink" href={bookHref}>
           <ArrowLeft size={16} /> {t.backHome}
         </a>
-      </header>
+      </header>}
 
       <main className="mx-auto max-w-lg px-4 py-7 sm:px-6 sm:py-10">
         <h1 className="text-2xl font-extrabold text-ink">{t.title}</h1>
@@ -127,7 +130,7 @@ export default function ManageBooking() {
                   {cancelled ? t.cancelledTitle : t.alreadyCancelled}
                 </h2>
                 {cancelled && <p className="mt-2 text-sm text-slate-500">{t.cancelledBody}</p>}
-                <a className="primary-button mt-6 inline-flex" href={`/book?lang=${language}`}>
+                <a className="primary-button mt-6 inline-flex" href={bookHref}>
                   {t.book}
                 </a>
               </div>
