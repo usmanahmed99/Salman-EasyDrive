@@ -287,6 +287,43 @@ Setting a value to 0 means that resource type is not required for this service. 
 4. After saving, test public availability at every enabled center.
 5. Make a test booking to confirm the slot, form, and calendar event all work correctly.
 
+## Packages
+
+A **package** bundles several sessions across one or more services into a single purchase (e.g. "3 driving lessons + 1 mock test + 1 road test"). The student books every session in one flow, picking a slot for each, and the whole package is confirmed together (all-or-nothing).
+
+### Create or edit a package
+
+1. Open **Packages** and choose **Add package** (or edit an existing one).
+2. Set the bilingual name and description, an optional display price and tax note.
+3. Under **Sessions in this package**, add one row per service and set how many sessions of it the package includes. The total session count is shown below the list.
+4. Choose which centers offer the package. Leave all unchecked to offer it everywhere.
+
+### Session ordering ("Must follow")
+
+Some sessions only make sense in a certain order — for example, the road-test exam should come *after* the practice lessons. To enforce this, use the **Must follow** dropdown on a session row:
+
+- Pick the service this session depends on (e.g. the exam "must follow" the driving lessons). Only other services already in the package appear as choices; a session can't depend on itself.
+- Leave it on **No prerequisite** for sessions that can be booked at any time.
+
+The rule enforced is always the same: **every session of the dependent service must start after every session of its prerequisite finishes.** A student cannot schedule the exam so it overlaps or precedes any lesson, and the booking is rejected server-side even if someone crafts a request by hand.
+
+### Booking order (anchor direction)
+
+When a session has a prerequisite, a second dropdown — **Booking order** — chooses how the student experiences that rule in the booking flow. Both options enforce the identical ordering above; they only differ in which side the student schedules first:
+
+- **Book the prerequisite first, then this session** (default) — the student schedules the lessons, and the exam's earlier time slots stay locked until every lesson is placed. Best when the lessons are the fixed part of the plan.
+- **Book this session first, then the prerequisite before it** — the student picks the exam date first (the "anchor"), and the lessons are then constrained to finish before it. Best when the exam date is the real deadline (e.g. an SAAQ road-test slot) and the lessons flex around it.
+
+In both modes, the booking page greys out the times that would break the order and shows a short amber note explaining what to schedule first. The student is automatically taken to a session they can actually schedule, so they never land on a fully-locked step.
+
+> Tip: pick **Book this session first** for anything with an externally-fixed date (road tests, exam appointments). Pick the default for open-ended prep where the lessons drive the schedule.
+
+### Change a package safely
+
+1. Editing a package replaces its session list wholesale on save — future package bookings already made are not altered.
+2. If you remove a service from a package, any "Must follow" pointing at it is cleared automatically.
+3. After saving, make a test package booking and confirm the ordering behaves as intended at an enabled center.
+
 ## Instructors and cars
 
 ### Named instructors

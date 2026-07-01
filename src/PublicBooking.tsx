@@ -1051,6 +1051,10 @@ interface SessionSlot {
   serviceName: { en: string; fr: string };
   serviceDescription: { en: string; fr: string };
   durationMinutes: number;
+  /** Slug of a service whose sessions must all finish before this one may start. */
+  prerequisiteServiceSlug?: string;
+  /** Which side of the dependency the student schedules first (see PackageItem). */
+  prerequisiteAnchor?: "prerequisite" | "target";
   slot?: Slot;
 }
 
@@ -1072,7 +1076,9 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
         serviceSlug: item.serviceSlug,
         serviceName: item.serviceName,
         serviceDescription: item.serviceDescription,
-        durationMinutes: item.durationMinutes
+        durationMinutes: item.durationMinutes,
+        prerequisiteServiceSlug: item.prerequisiteServiceSlug,
+        prerequisiteAnchor: item.prerequisiteAnchor
       }))
     )
   );
@@ -1168,11 +1174,114 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
   const exceedsDailyCap = (start: string) =>
     committedMinutesOnDay(wallClockParts(start).date, activeIndex) + active.durationMinutes > MAX_DAILY_MINUTES;
 
+  // Prerequisite ordering. The invariant is always "every dependent session starts after every
+  // prerequisite session ends", but the anchor direction decides which side the student schedules
+  // first, and therefore which bound the ACTIVE session gets:
+  //
+  //  - "prerequisite" anchor (default): the active session is the DEPENDENT. It gets a LOWER bound —
+  //    it may only start once all prerequisite sessions are placed and after the latest one ends.
+  //  - "target" anchor: the active session is a PREREQUISITE of a target-anchored dependent (e.g. the
+  //    exam). It gets an UPPER bound — it must end before the anchor (dependent) is placed and before
+  //    its earliest session starts. The dependent itself is the anchor and gets no bound.
+  //
+  // We surface at most one active constraint (lower or upper) plus a "schedule the other side first"
+  // gate, mirroring the daily-cap UX. Times are in ms; null bounds mean "no constraint".
+
+  // LOWER bound: active is a prerequisite-anchored dependent.
+  const lowerDep = active?.prerequisiteAnchor !== "target" ? active : undefined;
+  const lowerPrereqSlug = lowerDep?.prerequisiteServiceSlug;
+  const lowerPrereqSessions = lowerPrereqSlug ? sessions.filter((s) => s.serviceSlug === lowerPrereqSlug) : [];
+  const lowerPrereqScheduled = lowerPrereqSessions.length > 0 && lowerPrereqSessions.every((s) => s.slot);
+  const earliestAllowedStart = lowerPrereqScheduled
+    ? Math.max(...lowerPrereqSessions.map((s) => new Date(s.slot!.start).getTime() + s.durationMinutes * 60_000))
+    : null;
+
+  // UPPER bound: active is a prerequisite of a target-anchored dependent. Find any dependent item
+  // that (a) is target-anchored and (b) names the active session's service as its prerequisite.
+  const targetDep = active
+    ? sessions.find((s) => s.prerequisiteAnchor === "target" && s.prerequisiteServiceSlug === active.serviceSlug)
+    : undefined;
+  const targetDepSessions = targetDep ? sessions.filter((s) => s.serviceSlug === targetDep.serviceSlug) : [];
+  const targetDepScheduled = targetDepSessions.length > 0 && targetDepSessions.every((s) => s.slot);
+  const earliestTargetStart = targetDepScheduled
+    ? Math.min(...targetDepSessions.map((s) => new Date(s.slot!.start).getTime()))
+    : null;
+
+  // Human-readable names for the hints.
+  const lowerPrereqName = lowerPrereqSessions[0] ? localize(lowerPrereqSessions[0].serviceName, language) : "";
+  const targetDepName = targetDep ? localize(targetDep.serviceName, language) : "";
+
+  // A dependency applies to the active session if either bound is in play.
+  const hasLowerDependency = Boolean(lowerPrereqSlug);
+  const hasUpperDependency = Boolean(targetDep);
+  // The "other side isn't scheduled yet" gate: nothing is bookable until it's placed.
+  const lowerGateOpen = !hasLowerDependency || earliestAllowedStart !== null;
+  const upperGateOpen = !hasUpperDependency || earliestTargetStart !== null;
+
+  // True if picking `start` would violate ordering for the active session.
+  const violatesPrereq = (start: string) => {
+    const startMs = new Date(start).getTime();
+    if (hasLowerDependency) {
+      if (earliestAllowedStart === null) return true;               // prerequisite not scheduled yet
+      if (startMs < earliestAllowedStart) return true;              // before prerequisite ends
+    }
+    if (hasUpperDependency) {
+      if (earliestTargetStart === null) return true;                // anchor (exam) not scheduled yet
+      if (startMs + active.durationMinutes * 60_000 > earliestTargetStart) return true; // ends after anchor starts
+    }
+    return false;
+  };
+
+  // The single hint shown for the active session's ordering constraint (banner + slot tooltip).
+  // Prefers the "schedule the other side first" message when the relevant side isn't placed yet.
+  const orderHint = (() => {
+    if (hasLowerDependency && !lowerGateOpen) return t.prereqUnscheduled.replace("{service}", lowerPrereqName);
+    if (hasUpperDependency && !upperGateOpen) return t.targetUnscheduled.replace("{service}", targetDepName);
+    if (hasLowerDependency) return t.prereqHint.replace("{service}", lowerPrereqName);
+    if (hasUpperDependency) return t.targetHint.replace("{service}", targetDepName);
+    return "";
+  })();
+
+  // Whether a session can be scheduled *right now* against a given schedule — i.e. the side it
+  // depends on is already placed. Used to steer the flow (initial focus + auto-advance) so the
+  // student is never dropped on a tab where every slot is locked. A target-anchored dependent (the
+  // exam) is schedulable first; its prerequisites open once it's placed, and vice-versa by default.
+  const gateOpenIn = (session: SessionSlot, schedule: SessionSlot[]): boolean => {
+    // Lower gate: a prerequisite-anchored dependent needs its prerequisite sessions all placed.
+    if (session.prerequisiteAnchor !== "target" && session.prerequisiteServiceSlug) {
+      const prereq = schedule.filter((s) => s.serviceSlug === session.prerequisiteServiceSlug);
+      if (!(prereq.length > 0 && prereq.every((s) => s.slot))) return false;
+    }
+    // Upper gate: a prerequisite of a target-anchored dependent needs that dependent placed first.
+    const anchor = schedule.find((s) => s.prerequisiteAnchor === "target" && s.prerequisiteServiceSlug === session.serviceSlug);
+    if (anchor) {
+      const anchorSessions = schedule.filter((s) => s.serviceSlug === anchor.serviceSlug);
+      if (!(anchorSessions.length > 0 && anchorSessions.every((s) => s.slot))) return false;
+    }
+    return true;
+  };
+
+  // On first render (and whenever the schedule shifts), if the focused session is gated shut, move
+  // focus to the first unscheduled session that is schedulable now. Keeps target-anchored packages
+  // from opening on a fully-locked lessons tab.
+  useEffect(() => {
+    if (stage !== "schedule" || !active) return;
+    if (active.slot || gateOpenIn(active, sessions)) return;
+    const reachable = sessions.findIndex((session) => !session.slot && gateOpenIn(session, sessions));
+    if (reachable !== -1 && reachable !== activeIndex) setActiveIndex(reachable);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stage, activeIndex, sessions]);
+
   const pickSlot = (slot: Slot) => {
-    setSessions((prev) => prev.map((session, index) => index === activeIndex ? { ...session, slot } : session));
-    // Auto-advance to the next unscheduled session for a smooth flow.
-    const nextUnpicked = sessions.findIndex((session, index) => index !== activeIndex && !session.slot);
-    if (nextUnpicked !== -1) setActiveIndex(nextUnpicked);
+    // Compute against the post-pick schedule so gate checks see the slot we're placing.
+    const nextSessions = sessions.map((session, index) => index === activeIndex ? { ...session, slot } : session);
+    setSessions(nextSessions);
+    // Auto-advance to the next unscheduled session that can actually be scheduled now (skip ones
+    // still gated behind an unplaced dependency), falling back to any unscheduled session.
+    const nextReachable = nextSessions.findIndex((session, index) => index !== activeIndex && !session.slot && gateOpenIn(session, nextSessions));
+    const nextUnpicked = nextSessions.findIndex((session, index) => index !== activeIndex && !session.slot);
+    const next = nextReachable !== -1 ? nextReachable : nextUnpicked;
+    if (next !== -1) setActiveIndex(next);
   };
 
   const submit = async () => {
@@ -1370,6 +1479,12 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                       {t.dailyLimitHint}
                     </p>
                   )}
+                  {orderHint && (
+                    <p className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
+                      <Info size={14} className="mt-0.5 shrink-0" />
+                      {orderHint}
+                    </p>
+                  )}
                   {slotLoading ? (
                     <div className="grid grid-cols-2 gap-3 py-7 sm:grid-cols-3">
                       {Array.from({ length: 6 }).map((_, index) => <div className="skeleton h-12 rounded-xl" key={index} />)}
@@ -1381,7 +1496,9 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                         const selected = active.slot?.start === item.start;
                         // Block slots that would push this day past the 2h/day cap (selected slot stays clickable).
                         const capped = !selected && exceedsDailyCap(item.start);
-                        const disabled = taken || capped;
+                        // Block slots before the prerequisite finishes (selected slot stays clickable).
+                        const blockedByOrder = !selected && violatesPrereq(item.start);
+                        const disabled = taken || capped || blockedByOrder;
                         return (
                           <button
                             className={clsx(
@@ -1391,7 +1508,7 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
                                 : "border-slate-200 bg-white text-ink hover:border-brand-400 hover:bg-brand-50"
                             )}
                             disabled={disabled}
-                            title={capped ? t.dailyLimitHint : undefined}
+                            title={blockedByOrder ? orderHint : capped ? t.dailyLimitHint : undefined}
                             onClick={() => pickSlot(item)}
                             key={item.start}
                           >

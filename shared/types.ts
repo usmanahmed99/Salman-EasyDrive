@@ -46,6 +46,22 @@ export interface PackageItem {
   durationMinutes: number;
   quantity: number;
   sortOrder: number;
+  /**
+   * Slug of another service in the same package that must be completed first. When set, every
+   * session of THIS item must start after the last session of the prerequisite service ends,
+   * so e.g. an exam can only be scheduled once all practice lessons are done. Undefined = no order.
+   */
+  prerequisiteServiceSlug?: string;
+  /**
+   * How the prerequisite ordering is presented in the booking flow (only meaningful when
+   * `prerequisiteServiceSlug` is set). Both modes enforce the SAME invariant — every dependent
+   * session starts after every prerequisite session ends — but drive a different UX:
+   *  - "prerequisite" (default): schedule the prerequisites first; the dependent's earlier slots
+   *    stay locked until they're placed (lessons → exam).
+   *  - "target": schedule THIS session (the target, e.g. the exam) first as the anchor; the
+   *    prerequisites are then constrained to finish before it (exam → lessons before it).
+   */
+  prerequisiteAnchor?: "prerequisite" | "target";
 }
 
 /** An admin-defined bundle of sessions across one or more services. */
