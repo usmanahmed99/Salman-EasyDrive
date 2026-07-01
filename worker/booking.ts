@@ -2,7 +2,7 @@ import type { BookingForm } from "../shared/types";
 import type { Env } from "./types";
 import { checkExactSlot } from "./availability";
 import type { EvaluatedSlot } from "../shared/availability";
-import { createCalendarEvent, deleteCalendarEvent } from "./google";
+import { createCalendarEvent, deleteCalendarEvent, getCalendarEvent } from "./google";
 import { addMinutes, HttpError, randomToken, sha256, uuid } from "./utils";
 
 interface TemplateFields {
@@ -640,28 +640,30 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     : undefined;
 
   // A retry/resync re-runs this for a booking that already failed at least once. Inviting the same
-  // fixed staff address again on every retry trips Google's per-recipient invitation guard
-  // ("Calendar usage limits exceeded."). So staff are emailed only on the first sync; on retries
-  // they're still added to the event (responseStatus 'accepted') but not re-invited. The student is
-  // always emailed. Derived from the booking's own state — no caller needs to pass a flag.
+  // people again on every retry trips Google's invitation guard ("Calendar usage limits exceeded.").
+  // Existing events are reused below; when a retry must create a missing event, staff are still added
+  // but pre-accepted so only the student receives the replacement invite.
   const isRetry = booking.status === "calendar_sync_failed" || Number(booking.calendar_sync_attempts) > 0;
 
-  const canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
-    summary,
-    description,
-    start: booking.start_at,
-    end: booking.end_at,
-    timezone: booking.timezone,
-    attendeeEmail: booking.student_email || undefined,
-    notifyEmails,
-    notifyStaffByEmail: !isRetry,
-    bookingId,
-    reference: booking.reference
-  }, true);
-  await env.DB.prepare(`
-    INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
-    VALUES (?, ?, ?, ?, 'canonical', 'synced')
-  `).bind(uuid(), bookingId, canonical.calendar_id, canonicalEventId).run();
+  let canonicalEventId = await findReusableCalendarEvent(env, bookingId, canonical.calendar_id, "canonical");
+  if (!canonicalEventId) {
+    canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
+      summary,
+      description,
+      start: booking.start_at,
+      end: booking.end_at,
+      timezone: booking.timezone,
+      attendeeEmail: booking.student_email || undefined,
+      notifyEmails,
+      notifyStaffByEmail: !isRetry,
+      bookingId,
+      reference: booking.reference
+    }, true);
+    await env.DB.prepare(`
+      INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
+      VALUES (?, ?, ?, ?, 'canonical', 'synced')
+    `).bind(uuid(), bookingId, canonical.calendar_id, canonicalEventId).run();
+  }
 
   const allocatedResources = (await env.DB.prepare(`
     SELECT DISTINCT resources.calendar_id FROM booking_resource_allocations
@@ -671,19 +673,22 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   for (const resource of allocatedResources) {
     if (resource.calendar_id === canonical.calendar_id) continue;
     try {
-      const eventId = await createCalendarEvent(env, resource.calendar_id, {
-        summary,
-        description: `Internal booking block\nReference: ${booking.reference}`,
-        start: booking.operational_start_at,
-        end: booking.operational_end_at,
-        timezone: booking.timezone,
-        bookingId,
-        reference: booking.reference
-      }, false);
-      await env.DB.prepare(`
-        INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
-        VALUES (?, ?, ?, ?, 'resource_block', 'synced')
-      `).bind(uuid(), bookingId, resource.calendar_id, eventId).run();
+      let eventId = await findReusableCalendarEvent(env, bookingId, resource.calendar_id, "resource_block");
+      if (!eventId) {
+        eventId = await createCalendarEvent(env, resource.calendar_id, {
+          summary,
+          description: `Internal booking block\nReference: ${booking.reference}`,
+          start: booking.operational_start_at,
+          end: booking.operational_end_at,
+          timezone: booking.timezone,
+          bookingId,
+          reference: booking.reference
+        }, false);
+        await env.DB.prepare(`
+          INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
+          VALUES (?, ?, ?, ?, 'resource_block', 'synced')
+        `).bind(uuid(), bookingId, resource.calendar_id, eventId).run();
+      }
     } catch (error) {
       await env.DB.prepare(`
         INSERT INTO booking_calendar_events(id, booking_id, calendar_id, event_role, sync_status, last_error)
@@ -698,6 +703,43 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     calendar_last_error = NULL, calendar_sync_attempts = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(bookingId).run();
   return { status: "synced" as const };
+}
+
+async function findReusableCalendarEvent(
+  env: Env,
+  bookingId: string,
+  calendarId: string,
+  role: "canonical" | "resource_block"
+) {
+  const rows = (await env.DB.prepare(`
+    SELECT id, google_event_id
+    FROM booking_calendar_events
+    WHERE booking_id = ?
+      AND calendar_id = ?
+      AND event_role = ?
+      AND google_event_id IS NOT NULL
+      AND sync_status != 'deleted'
+    ORDER BY created_at DESC
+  `).bind(bookingId, calendarId, role).all<{ id: string; google_event_id: string }>()).results;
+
+  for (const row of rows) {
+    const status = await getCalendarEvent(env, calendarId, row.google_event_id);
+    if (status.exists) {
+      await env.DB.prepare(`
+        UPDATE booking_calendar_events
+        SET sync_status = 'synced', last_error = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(row.id).run();
+      return row.google_event_id;
+    }
+    await env.DB.prepare(`
+      UPDATE booking_calendar_events
+      SET sync_status = 'deleted', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(row.id).run();
+  }
+
+  return null;
 }
 
 // Removes the booking's Google events when it is cancelled. The canonical event is
