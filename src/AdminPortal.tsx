@@ -2932,7 +2932,7 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
     try {
       const result = await persistSettings({ notificationEmail: notificationEmail.trim() || null });
       setNotificationEmail(result.template.notification_email || "");
-      toast.show("success", notificationEmail.trim() ? "Booking notifications will be sent to this address." : "Booking notifications turned off.");
+      toast.show("success", notificationEmail.trim() ? "Booking notifications will be sent to these addresses." : "Booking notifications turned off.");
     } catch (err) {
       toast.show("error", errorMessage(err));
     } finally {
@@ -3115,20 +3115,20 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
           <div className="border-b border-slate-100 p-5">
             <h2 className="font-extrabold text-ink">Booking notifications</h2>
             <p className="mt-1 text-xs text-slate-500">
-              Add a staff inbox (e.g. info@easydriving.ca) as an attendee on every booking's calendar event,
-              so it receives an invite email for each new booking — public, admin, and every package session.
-              Leave blank to turn notifications off.
+              Add one or more staff inboxes (e.g. info@easydriving.ca) as attendees on every booking's calendar event,
+              so they receive an invite email for each new booking — public, admin, and every package session.
+              Separate multiple addresses with commas. Leave blank to turn notifications off.
             </p>
           </div>
           <div className="space-y-4 p-5">
             <label className="block">
-              <span className="label">Notification email</span>
+              <span className="label">Notification email(s)</span>
               <input
                 className="field"
-                type="email"
+                type="text"
                 value={notificationEmail}
                 onChange={(event) => setNotificationEmail(event.target.value)}
-                placeholder="info@easydriving.ca"
+                placeholder="info@easydriving.ca, bookings@easydriving.ca"
               />
             </label>
             <p className="text-xs text-slate-400">

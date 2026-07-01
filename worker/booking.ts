@@ -633,9 +633,12 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? renderTemplate(activeDescriptionTemplate, fields)
     : defaultDescription;
 
-  // Staff notification inbox (optional): added as an attendee so Google emails it for every
-  // booking — public, admin, and each package session all flow through here.
-  const notifyEmails = template?.notification_email?.trim() ? [template.notification_email.trim()] : undefined;
+  // Staff notification inbox(es) (optional): added as attendees so Google emails them for every
+  // booking — public, admin, and each package session all flow through here. Stored as a
+  // comma-separated list; google.ts merges these with the student and de-duplicates.
+  const notifyEmails = template?.notification_email?.trim()
+    ? template.notification_email.split(/[,\n;]/).map((value) => value.trim()).filter(Boolean)
+    : undefined;
 
   const canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
     summary,

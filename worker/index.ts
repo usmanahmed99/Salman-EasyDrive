@@ -851,9 +851,29 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         const title = body.titleTemplate?.trim() ? body.titleTemplate : null;
         const description = body.descriptionTemplate?.trim() ? body.descriptionTemplate : null;
         const descriptionFr = body.descriptionTemplateFr?.trim() ? body.descriptionTemplateFr : null;
-        const notificationEmailRaw = body.notificationEmail?.trim() || null;
-        if (notificationEmailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmailRaw)) {
-          throw new HttpError(400, "Please enter a valid notification email address.", "invalid_email");
+        // Notification email accepts a comma/newline-separated list. Each address is validated,
+        // de-duplicated (case-insensitively), then stored back as a clean comma-separated string.
+        let notificationEmailRaw: string | null = null;
+        if (body.notificationEmail?.trim()) {
+          const emails = body.notificationEmail
+            .split(/[,\n;]/)
+            .map((value) => value.trim())
+            .filter(Boolean);
+          for (const email of emails) {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+              throw new HttpError(400, `"${email}" is not a valid email address.`, "invalid_email");
+            }
+          }
+          const unique: string[] = [];
+          const seen = new Set<string>();
+          for (const email of emails) {
+            const key = email.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              unique.push(email);
+            }
+          }
+          notificationEmailRaw = unique.length ? unique.join(", ") : null;
         }
         await env.DB.prepare(`
           UPDATE calendar_event_settings
