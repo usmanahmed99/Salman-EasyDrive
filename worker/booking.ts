@@ -633,12 +633,18 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? renderTemplate(activeDescriptionTemplate, fields)
     : defaultDescription;
 
-  // Staff notification inbox(es) (optional): added as attendees so Google emails them for every
-  // booking — public, admin, and each package session all flow through here. Stored as a
-  // comma-separated list; google.ts merges these with the student and de-duplicates.
+  // Staff notification inbox(es) (optional): added as attendees so Google emails them on the
+  // booking's FIRST sync. Stored as a comma-separated list; google.ts merges them with the student.
   const notifyEmails = template?.notification_email?.trim()
     ? template.notification_email.split(/[,\n;]/).map((value) => value.trim()).filter(Boolean)
     : undefined;
+
+  // A retry/resync re-runs this for a booking that already failed at least once. Inviting the same
+  // fixed staff address again on every retry trips Google's per-recipient invitation guard
+  // ("Calendar usage limits exceeded."). So staff are emailed only on the first sync; on retries
+  // they're still added to the event (responseStatus 'accepted') but not re-invited. The student is
+  // always emailed. Derived from the booking's own state — no caller needs to pass a flag.
+  const isRetry = booking.status === "calendar_sync_failed" || Number(booking.calendar_sync_attempts) > 0;
 
   const canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
     summary,
@@ -648,6 +654,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     timezone: booking.timezone,
     attendeeEmail: booking.student_email || undefined,
     notifyEmails,
+    notifyStaffByEmail: !isRetry,
     bookingId,
     reference: booking.reference
   }, true);
