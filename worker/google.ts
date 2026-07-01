@@ -117,7 +117,13 @@ export async function createCalendarEvent(
     end: string;
     timezone: string;
     attendeeEmail?: string;
-    /** Extra address(es) that should receive the invite (e.g. the staff booking-notification inbox). */
+    /**
+     * Staff notification inbox(es). Added as attendees so the booking appears on their calendar, but
+     * marked responseStatus 'accepted' so Google treats them as already-responded and does not keep
+     * inviting them. Only the student is emailed the invite (see the sendUpdates handling below):
+     * re-inviting the same fixed staff address on every retry was tripping Google's per-recipient
+     * invitation guard ("Calendar usage limits exceeded."), so staff must not drive invite emails.
+     */
     notifyEmails?: string[];
     bookingId: string;
     reference: string;
@@ -136,15 +142,23 @@ export async function createCalendarEvent(
         description: event.description,
         start: { dateTime: event.start, timeZone: event.timezone },
         end: { dateTime: event.end, timeZone: event.timezone },
-        // Attendees only matter when Google should email them (sendUpdates). The student (if any)
-        // plus any staff notification addresses are merged and de-duplicated.
+        // Attendees only matter when Google should email them (sendUpdates). The student is a normal
+        // invited attendee (gets the invite email). Staff notification inboxes are added as attendees
+        // marked responseStatus 'accepted' so the event shows on their calendar WITHOUT Google
+        // repeatedly inviting them — re-inviting a fixed staff address on every retry trips Google's
+        // per-recipient invitation guard ("Calendar usage limits exceeded.").
         attendees: (() => {
           if (!sendUpdates) return undefined;
-          const emails = [event.attendeeEmail, ...(event.notifyEmails || [])]
-            .map((value) => value?.trim())
-            .filter((value): value is string => Boolean(value));
-          const unique = [...new Set(emails.map((value) => value.toLowerCase()))];
-          return unique.length ? unique.map((email) => ({ email })) : undefined;
+          const student = event.attendeeEmail?.trim().toLowerCase();
+          const staff = (event.notifyEmails || [])
+            .map((value) => value?.trim().toLowerCase())
+            .filter((value): value is string => Boolean(value) && value !== student);
+          const attendees: Array<{ email: string; responseStatus?: string }> = [];
+          if (student) attendees.push({ email: student });
+          for (const email of [...new Set(staff)]) {
+            attendees.push({ email, responseStatus: "accepted" });
+          }
+          return attendees.length ? attendees : undefined;
         })(),
         extendedProperties: {
           private: {
