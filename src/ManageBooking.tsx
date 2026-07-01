@@ -132,11 +132,8 @@ export default function ManageBooking() {
                   {cancelled ? t.cancelledTitle : t.alreadyCancelled}
                 </h2>
                 {cancelled && <p className="mt-2 text-sm text-slate-500">{t.cancelledBody}</p>}
-                <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                  <a className="secondary-button w-full justify-center sm:order-1" href={bookHref}>
-                    {t.book}
-                  </a>
-                  <a className="primary-button w-full justify-center sm:order-2" href="https://easydriving.ca" target="_top" rel="noopener">
+                <div className="mt-6 flex justify-center">
+                  <a className="primary-button justify-center" href="https://easydriving.ca" target="_top" rel="noopener">
                     <Home size={17} /> {t.backToSite} <ArrowRight size={17} />
                   </a>
                 </div>
