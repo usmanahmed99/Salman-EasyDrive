@@ -670,16 +670,16 @@ export default function PublicBooking() {
               Your booking is saved. Calendar sync is temporarily unavailable and staff have been alerted.
             </p>
           )}
-          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
-            <a
-              className="primary-button"
-              href={`/booking/${confirmation.reference}?token=${encodeURIComponent(confirmation.manageToken || "")}${embedded ? "&embed=1" : ""}`}
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
+            <button
+              className="secondary-button w-full justify-center sm:order-1"
+              onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}
             >
-              {t.manage} <ArrowRight size={17} />
-            </a>
-            <button className="secondary-button" onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}>
               {t.another}
             </button>
+            <a className="primary-button w-full justify-center sm:order-2" href="https://easydriving.ca" target="_top" rel="noopener">
+              <Home size={17} /> {t.backToSite} <ArrowRight size={17} />
+            </a>
           </div>
         </main>
       </div>
@@ -1262,10 +1262,16 @@ function PackageBookingFlow({ pkg, center, language, embedded, config, onLanguag
               </div>
             ))}
           </div>
-          <div className="mt-6 flex justify-center">
-            <button className="secondary-button" onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}>
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
+            <button
+              className="secondary-button w-full justify-center sm:order-1"
+              onClick={() => window.location.assign(`/book?lang=${language}${embedded ? "&embed=1" : ""}`)}
+            >
               {t.another}
             </button>
+            <a className="primary-button w-full justify-center sm:order-2" href="https://easydriving.ca" target="_top" rel="noopener">
+              <Home size={17} /> {t.backToSite} <ArrowRight size={17} />
+            </a>
           </div>
         </main>
       </div>
