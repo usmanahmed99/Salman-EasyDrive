@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowLeft, CalendarCheck, CheckCircle2, Clock3, LoaderCircle, MapPin, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CalendarCheck, CheckCircle2, Clock3, Home, LoaderCircle, MapPin, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { cancelManagedBooking, getManagedBooking } from "./api";
 import { getLanguage } from "./i18n";
@@ -24,7 +24,8 @@ const text = {
     cancelledBody: "Your booking has been cancelled and the calendar event removed. A confirmation has been emailed to you.",
     alreadyCancelled: "This booking is already cancelled.",
     book: "Book another session",
-    backHome: "Back to booking"
+    backHome: "Back to booking",
+    backToSite: "Back to main website"
   },
   fr: {
     title: "Gérer votre réservation",
@@ -44,7 +45,8 @@ const text = {
     cancelledBody: "Votre réservation a été annulée et l'événement retiré du calendrier. Une confirmation vous a été envoyée par courriel.",
     alreadyCancelled: "Cette réservation est déjà annulée.",
     book: "Réserver une autre séance",
-    backHome: "Retour à la réservation"
+    backHome: "Retour à la réservation",
+    backToSite: "Retour au site principal"
   }
 };
 
@@ -106,7 +108,7 @@ export default function ManageBooking() {
         </a>
       </header>}
 
-      <main className="mx-auto max-w-lg px-4 py-7 sm:px-6 sm:py-10">
+      <main className="mx-auto max-w-2xl px-4 py-7 sm:px-6 sm:py-10">
         <h1 className="text-2xl font-extrabold text-ink">{t.title}</h1>
 
         {loading && (
@@ -130,9 +132,14 @@ export default function ManageBooking() {
                   {cancelled ? t.cancelledTitle : t.alreadyCancelled}
                 </h2>
                 {cancelled && <p className="mt-2 text-sm text-slate-500">{t.cancelledBody}</p>}
-                <a className="primary-button mt-6 inline-flex" href={bookHref}>
-                  {t.book}
-                </a>
+                <div className="mt-6 grid gap-3 sm:grid-cols-2">
+                  <a className="secondary-button w-full justify-center sm:order-1" href={bookHref}>
+                    {t.book}
+                  </a>
+                  <a className="primary-button w-full justify-center sm:order-2" href="https://easydriving.ca" target="_top" rel="noopener">
+                    <Home size={17} /> {t.backToSite} <ArrowRight size={17} />
+                  </a>
+                </div>
               </div>
             ) : (
               <>
