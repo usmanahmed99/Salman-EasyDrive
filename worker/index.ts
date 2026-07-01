@@ -6,7 +6,7 @@ import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback
 import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
 import { confirmPackageBooking, packageResponse, reserveSession, type PackageBookingPayload } from "./package";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
-import { reconcileCalendar } from "./reconcile";
+import { reconcileCalendar, retryFailedSyncs } from "./reconcile";
 import type { DbCenter, DbService, Env } from "./types";
 import {
   assertTrustedOrigin,
@@ -1240,6 +1240,9 @@ export default {
     // Cron fires every 30 min for calendar reconciliation; reconcile gates itself to
     // centers within working hours and is cheap when everyone is closed.
     ctx.waitUntil(reconcileCalendar(env).catch((error) => console.error("[reconcile] failed", error)));
+    // Retry bookings whose calendar sync failed transiently (e.g. Google invitation quota),
+    // so a rate-limit blip self-heals within a day instead of needing a manual admin Retry.
+    ctx.waitUntil(retryFailedSyncs(env).catch((error) => console.error("[reconcile] retry failed", error)));
     // Retention is a once-a-day job: only run it on the early-morning tick.
     const now = new Date();
     if (now.getUTCHours() === 5 && now.getUTCMinutes() < 30) {

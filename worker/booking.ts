@@ -688,7 +688,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
 
   await env.DB.prepare(`
     UPDATE bookings SET status = 'confirmed', calendar_sync_status = 'synced',
-    calendar_last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    calendar_last_error = NULL, calendar_sync_attempts = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(bookingId).run();
   return { status: "synced" as const };
 }
