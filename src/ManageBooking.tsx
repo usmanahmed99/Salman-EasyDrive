@@ -108,7 +108,7 @@ export default function ManageBooking() {
         </a>
       </header>}
 
-      <main className="mx-auto max-w-lg px-4 py-7 sm:px-6 sm:py-10">
+      <main className="mx-auto max-w-2xl px-4 py-7 sm:px-6 sm:py-10">
         <h1 className="text-2xl font-extrabold text-ink">{t.title}</h1>
 
         {loading && (
