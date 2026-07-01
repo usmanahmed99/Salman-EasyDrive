@@ -913,8 +913,22 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     }
     const resyncMatch = path.match(/^\/api\/admin\/bookings\/([^/]+)\/resync-calendar$/);
     if (resyncMatch && method === "POST") {
-      const result = await syncBookingCalendar(env, resyncMatch[1]);
-      return json(result);
+      const bookingId = resyncMatch[1];
+      try {
+        const result = await syncBookingCalendar(env, bookingId);
+        return json(result);
+      } catch (error) {
+        // syncBookingCalendar throws plain Errors (e.g. Google's "Calendar usage limits exceeded."
+        // quota error, or a missing calendar mapping). Persist the reason on the booking and return
+        // it to the admin instead of a generic 500, so they can tell a transient quota blip (which
+        // the cron auto-retries) apart from a real config problem.
+        const message = error instanceof Error ? error.message : "Calendar sync failed";
+        await env.DB.prepare(`
+          UPDATE bookings SET status='calendar_sync_failed', calendar_sync_status='failed',
+          calendar_last_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+        `).bind(message.slice(0, 500), bookingId).run();
+        return json({ error: `Calendar sync failed: ${message}`, code: "calendar_sync_failed" }, 502);
+      }
     }
     const adminCancelMatch = path.match(/^\/api\/admin\/bookings\/([^/]+)\/cancel$/);
     if (adminCancelMatch && method === "POST") {
