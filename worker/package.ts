@@ -31,6 +31,9 @@ interface DbPackageItemRow {
   duration_minutes: number;
   quantity: number;
   sort_order: number;
+  prerequisite_service_id: string | null;
+  prerequisite_service_slug: string | null;
+  prerequisite_anchor: string | null;
 }
 
 export function packageResponse(row: DbPackageRow, items: DbPackageItemRow[]): Package {
@@ -45,7 +48,9 @@ export function packageResponse(row: DbPackageRow, items: DbPackageItemRow[]): P
       serviceDescription: { en: item.service_description_en || "", fr: item.service_description_fr || "" },
       durationMinutes: item.duration_minutes,
       quantity: item.quantity,
-      sortOrder: item.sort_order
+      sortOrder: item.sort_order,
+      prerequisiteServiceSlug: item.prerequisite_service_slug || undefined,
+      prerequisiteAnchor: item.prerequisite_anchor === "target" ? "target" as const : "prerequisite" as const
     }));
   return {
     id: row.id,
@@ -70,9 +75,11 @@ export async function loadPackage(env: Env, slug: string): Promise<Package | nul
   const items = (await env.DB.prepare(`
     SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
       services.name_fr AS service_name_fr, services.description_en AS service_description_en,
-      services.description_fr AS service_description_fr, services.duration_minutes
+      services.description_fr AS service_description_fr, services.duration_minutes,
+      prereq.slug AS prerequisite_service_slug
     FROM package_items
     JOIN services ON services.id = package_items.service_id
+    LEFT JOIN services prereq ON prereq.id = package_items.prerequisite_service_id
     WHERE package_items.package_id = ?
   `).bind(row.id).all<DbPackageItemRow>()).results;
   return packageResponse(row, items);
@@ -101,6 +108,37 @@ export function validatePackageSessions(
     const key = `${session.serviceSlug}@${session.start}`;
     if (seen.has(key)) return "duplicate_slot";
     seen.add(key);
+  }
+  return null;
+}
+
+/**
+ * Validates prerequisite ordering: for any item that declares a `prerequisiteServiceSlug`, every
+ * session of that item must start strictly after the LAST prerequisite session ENDS (start +
+ * prerequisite duration). This lets a package require e.g. the exam to follow all practice lessons.
+ * Pure so it can be unit-tested. Returns null when valid, or the slug of the first item whose
+ * ordering is violated (including when its prerequisite has no scheduled sessions at all).
+ */
+export function validatePackageOrdering(
+  items: Array<{ serviceSlug: string; durationMinutes: number; prerequisiteServiceSlug?: string }>,
+  sessions: Array<{ serviceSlug: string; start: string }>
+): string | null {
+  const durationBySlug = new Map(items.map((item) => [item.serviceSlug, item.durationMinutes]));
+  for (const item of items) {
+    const prereq = item.prerequisiteServiceSlug;
+    if (!prereq) continue;
+    const prereqDuration = durationBySlug.get(prereq) ?? 0;
+    const prereqSessions = sessions.filter((session) => session.serviceSlug === prereq);
+    const dependentSessions = sessions.filter((session) => session.serviceSlug === item.serviceSlug);
+    // A prerequisite with no scheduled sessions can't be "completed first", so any dependent session
+    // violates the ordering. (In practice validatePackageSessions runs first and guarantees the
+    // prerequisite's full session count, so this guards the pure function's contract.)
+    if (dependentSessions.length > 0 && prereqSessions.length === 0) return item.serviceSlug;
+    const latestPrereqEnd = prereqSessions
+      .reduce((max, session) => Math.max(max, new Date(session.start).getTime() + prereqDuration * 60_000), -Infinity);
+    for (const session of dependentSessions) {
+      if (new Date(session.start).getTime() < latestPrereqEnd) return item.serviceSlug;
+    }
   }
   return null;
 }
@@ -202,6 +240,13 @@ export async function confirmPackageBooking(env: Env, payload: PackageBookingPay
   const problem = validatePackageSessions(pkg.items, payload.sessions);
   if (problem === "package_mismatch") throw new HttpError(400, "The selected sessions do not match this package.", "package_mismatch");
   if (problem === "duplicate_slot") throw new HttpError(400, "Please choose a different time for each session.", "duplicate_slot");
+
+  // Prerequisite ordering: a dependent session (e.g. exam) must be scheduled after its prerequisite
+  // service's sessions (e.g. all practice lessons) finish. The client greys out invalid slots, but
+  // enforce it here too so the rule can't be bypassed by a crafted request.
+  if (validatePackageOrdering(pkg.items, payload.sessions)) {
+    throw new HttpError(400, "Some sessions must be scheduled after the ones they depend on.", "package_ordering");
+  }
 
   // At most 2 hours of lessons per local calendar day. The client disables over-cap slots, but
   // enforce it here too so the rule can't be bypassed by a crafted request.

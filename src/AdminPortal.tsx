@@ -1840,18 +1840,28 @@ function PackageModal({ pkg, services, centers, initialCenterIds, onClose, onSav
     priceTaxMode: pkg?.priceTaxMode || "none",
     enabled: pkg?.enabled ?? true
   });
-  const [items, setItems] = useState<Array<{ serviceId: string; quantity: number }>>(
-    pkg?.items.map((item) => ({ serviceId: item.serviceId, quantity: item.quantity }))
-      || [{ serviceId: services[0]?.id || "", quantity: 1 }]
+  // Each item carries an optional prerequisite: the id of another service in this package that must
+  // be scheduled earlier (e.g. the exam must follow the practice lessons). The API stores/returns it
+  // as a slug, so map slug↔id against the services list.
+  const slugToId = useMemo(() => new Map(services.map((s) => [s.slug, s.id])), [services]);
+  type ItemDraft = { serviceId: string; quantity: number; prerequisiteServiceId: string; prerequisiteAnchor: "prerequisite" | "target" };
+  const [items, setItems] = useState<ItemDraft[]>(
+    pkg?.items.map((item) => ({
+      serviceId: item.serviceId,
+      quantity: item.quantity,
+      prerequisiteServiceId: (item.prerequisiteServiceSlug && slugToId.get(item.prerequisiteServiceSlug)) || "",
+      prerequisiteAnchor: item.prerequisiteAnchor === "target" ? "target" : "prerequisite"
+    }))
+      || [{ serviceId: services[0]?.id || "", quantity: 1, prerequisiteServiceId: "", prerequisiteAnchor: "prerequisite" }]
   );
   const [centerIds, setCenterIds] = useState<string[]>(initialCenterIds);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const set = (key: keyof typeof v, value: unknown) => setV((current) => ({ ...current, [key]: value }));
 
-  const setItem = (index: number, patch: Partial<{ serviceId: string; quantity: number }>) =>
+  const setItem = (index: number, patch: Partial<ItemDraft>) =>
     setItems((prev) => prev.map((item, i) => i === index ? { ...item, ...patch } : item));
-  const addItem = () => setItems((prev) => [...prev, { serviceId: services[0]?.id || "", quantity: 1 }]);
+  const addItem = () => setItems((prev) => [...prev, { serviceId: services[0]?.id || "", quantity: 1, prerequisiteServiceId: "", prerequisiteAnchor: "prerequisite" }]);
   const removeItem = (index: number) => setItems((prev) => prev.filter((_, i) => i !== index));
   const toggleCenter = (id: string) =>
     setCenterIds((prev) => prev.includes(id) ? prev.filter((c) => c !== id) : [...prev, id]);
@@ -1860,8 +1870,20 @@ function PackageModal({ pkg, services, centers, initialCenterIds, onClose, onSav
 
   const save = async () => {
     setError("");
-    const cleaned = items.filter((item) => item.serviceId && item.quantity > 0);
-    if (cleaned.length === 0) { setError("Add at least one service with a quantity."); return; }
+    const kept = items.filter((item) => item.serviceId && item.quantity > 0);
+    if (kept.length === 0) { setError("Add at least one service with a quantity."); return; }
+    // Only keep a prerequisite that points at a different service still present in the package.
+    // When it's dropped, reset the anchor to the default so a stale "target" can't linger.
+    const keptServiceIds = new Set(kept.map((item) => item.serviceId));
+    const cleaned = kept.map((item) => {
+      const validPrereq =
+        item.prerequisiteServiceId && item.prerequisiteServiceId !== item.serviceId && keptServiceIds.has(item.prerequisiteServiceId);
+      return {
+        ...item,
+        prerequisiteServiceId: validPrereq ? item.prerequisiteServiceId : null,
+        prerequisiteAnchor: validPrereq ? item.prerequisiteAnchor : "prerequisite"
+      };
+    });
     setSaving(true);
     const payload = { ...v, slug: v.slug || slugify(v.nameEn), items: cleaned };
     try {
@@ -1913,18 +1935,55 @@ function PackageModal({ pkg, services, centers, initialCenterIds, onClose, onSav
         <div className="sm:col-span-2">
           <span className="label mb-2 block">Sessions in this package</span>
           <div className="space-y-2">
-            {items.map((item, index) => (
-              <div className="flex items-center gap-2" key={index}>
-                <select className="field min-w-0 flex-1" value={item.serviceId} onChange={(event) => setItem(index, { serviceId: event.target.value })}>
-                  {services.map((service) => <option value={service.id} key={service.id}>{service.name.en}</option>)}
-                </select>
-                <input className="field !w-20 shrink-0" type="number" min={1} value={item.quantity} onChange={(event) => setItem(index, { quantity: Math.max(1, Number(event.target.value)) })} />
-                <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label="Remove session" onClick={() => removeItem(index)} disabled={items.length === 1}><Trash2 size={15} /></button>
+            {items.map((item, index) => {
+              // Other services in the package are candidate prerequisites (can't depend on itself).
+              const prereqChoices = items.filter((other, i) => i !== index && other.serviceId && other.serviceId !== item.serviceId);
+              return (
+              <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-2.5" key={index}>
+                <div className="flex items-center gap-2">
+                  <select className="field min-w-0 flex-1" value={item.serviceId} onChange={(event) => setItem(index, { serviceId: event.target.value })}>
+                    {services.map((service) => <option value={service.id} key={service.id}>{service.name.en}</option>)}
+                  </select>
+                  <input className="field !w-20 shrink-0" type="number" min={1} value={item.quantity} onChange={(event) => setItem(index, { quantity: Math.max(1, Number(event.target.value)) })} />
+                  <button className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-slate-200 bg-white text-slate-400 hover:border-red-200 hover:bg-red-50 hover:text-red-600" aria-label="Remove session" onClick={() => removeItem(index)} disabled={items.length === 1}><Trash2 size={15} /></button>
+                </div>
+                <label className="mt-2 flex items-center gap-2">
+                  <span className="shrink-0 text-xs font-semibold text-slate-500">Must follow</span>
+                  <select
+                    className="field min-w-0 flex-1 !py-1.5 text-xs"
+                    value={prereqChoices.some((c) => c.serviceId === item.prerequisiteServiceId) ? item.prerequisiteServiceId : ""}
+                    onChange={(event) => setItem(index, { prerequisiteServiceId: event.target.value })}
+                  >
+                    <option value="">No prerequisite (bookable any time)</option>
+                    {prereqChoices.map((choice) => {
+                      const service = services.find((s) => s.id === choice.serviceId);
+                      return <option value={choice.serviceId} key={choice.serviceId}>{service?.name.en || "Service"}</option>;
+                    })}
+                  </select>
+                </label>
+                {prereqChoices.some((c) => c.serviceId === item.prerequisiteServiceId) && (() => {
+                  const prereqName = services.find((s) => s.id === item.prerequisiteServiceId)?.name.en || "the prerequisite";
+                  const thisName = services.find((s) => s.id === item.serviceId)?.name.en || "this session";
+                  return (
+                    <label className="mt-2 flex items-center gap-2">
+                      <span className="shrink-0 text-xs font-semibold text-slate-500">Booking order</span>
+                      <select
+                        className="field min-w-0 flex-1 !py-1.5 text-xs"
+                        value={item.prerequisiteAnchor}
+                        onChange={(event) => setItem(index, { prerequisiteAnchor: event.target.value === "target" ? "target" : "prerequisite" })}
+                      >
+                        <option value="prerequisite">Book {prereqName} first, then {thisName}</option>
+                        <option value="target">Book {thisName} first, then {prereqName} before it</option>
+                      </select>
+                    </label>
+                  );
+                })()}
               </div>
-            ))}
+              );
+            })}
           </div>
           <button className="secondary-button mt-2 min-h-9 px-3 py-1.5 text-xs" onClick={addItem}><Plus size={14} /> Add service</button>
-          <p className="mt-1.5 text-xs text-slate-400">Total: {sessionCount} session{sessionCount === 1 ? "" : "s"}. Each is booked as its own session.</p>
+          <p className="mt-1.5 text-xs text-slate-400">Total: {sessionCount} session{sessionCount === 1 ? "" : "s"}. Each is booked as its own session. Use “Must follow” to require a session (e.g. the exam) to be scheduled only after another service’s sessions (e.g. all practice lessons) finish. “Booking order” chooses whether the student schedules the prerequisite first, or picks the exam date first and fits the lessons before it.</p>
         </div>
         <div className="sm:col-span-2">
           <span className="label mb-2 block">Available at centers</span>

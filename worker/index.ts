@@ -325,9 +325,11 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       const items = (await env.DB.prepare(`
         SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
           services.name_fr AS service_name_fr, services.description_en AS service_description_en,
-          services.description_fr AS service_description_fr, services.duration_minutes
+          services.description_fr AS service_description_fr, services.duration_minutes,
+          prereq.slug AS prerequisite_service_slug
         FROM package_items
         JOIN services ON services.id = package_items.service_id
+        LEFT JOIN services prereq ON prereq.id = package_items.prerequisite_service_id
         WHERE package_items.package_id IN (${ids.map(() => "?").join(",")})
       `).bind(...ids).all<Parameters<typeof packageResponse>[1][number]>()).results;
       return json({ packages: rows.results.map((row) => packageResponse(row, items)) });
@@ -348,11 +350,27 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       priceTaxMode: (body.priceTaxMode === "incl" || body.priceTaxMode === "plus") ? body.priceTaxMode : "none",
       enabled: body.enabled === false ? 0 : 1
     };
-    // Items: [{ serviceId, quantity }]. Replaced wholesale on every write.
+    // Items: [{ serviceId, quantity, prerequisiteServiceId?, prerequisiteAnchor? }]. Replaced
+    // wholesale on every write.
     const rawItems = Array.isArray(body.items) ? body.items as Array<Record<string, unknown>> : [];
     const items = rawItems
-      .map((item) => ({ serviceId: String(item.serviceId || ""), quantity: Math.max(1, Number(item.quantity || 1)) }))
+      .map((item) => ({
+        serviceId: String(item.serviceId || ""),
+        quantity: Math.max(1, Number(item.quantity || 1)),
+        prerequisiteServiceId: item.prerequisiteServiceId ? String(item.prerequisiteServiceId) : null,
+        prerequisiteAnchor: item.prerequisiteAnchor === "target" ? "target" : "prerequisite"
+      }))
       .filter((item) => item.serviceId);
+    // A prerequisite must reference a different service that is actually in the package. Drop any
+    // that don't qualify so a stale/self reference can't wedge every booking on the ordering guard;
+    // reset the anchor to the default when there's no prerequisite to anchor against.
+    const packageServiceIds = new Set(items.map((item) => item.serviceId));
+    for (const item of items) {
+      if (item.prerequisiteServiceId === item.serviceId || !packageServiceIds.has(item.prerequisiteServiceId ?? "")) {
+        item.prerequisiteServiceId = null;
+        item.prerequisiteAnchor = "prerequisite";
+      }
+    }
     if (method === "POST") {
       if (!values.slug || !values.nameEn) throw new HttpError(400, "Package name and slug are required.");
       if (!items.length) throw new HttpError(400, "A package needs at least one service.");
@@ -364,8 +382,8 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.enabled, (maxRow?.max ?? -1) + 1),
         ...items.map((item, index) => env.DB.prepare(
-          "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order) VALUES (?, ?, ?, ?, ?)"
-        ).bind(uuid(), nextId, item.serviceId, item.quantity, index))
+          "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order, prerequisite_service_id, prerequisite_anchor) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(uuid(), nextId, item.serviceId, item.quantity, index, item.prerequisiteServiceId, item.prerequisiteAnchor))
       ];
       await env.DB.batch(statements);
       // Offer the package at every existing center by default (mirrors service creation).
@@ -386,8 +404,8 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
         `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.enabled, id),
         env.DB.prepare("DELETE FROM package_items WHERE package_id=?").bind(id),
         ...items.map((item, index) => env.DB.prepare(
-          "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order) VALUES (?, ?, ?, ?, ?)"
-        ).bind(uuid(), id, item.serviceId, item.quantity, index))
+          "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order, prerequisite_service_id, prerequisite_anchor) VALUES (?, ?, ?, ?, ?, ?, ?)"
+        ).bind(uuid(), id, item.serviceId, item.quantity, index, item.prerequisiteServiceId, item.prerequisiteAnchor))
       ];
       await env.DB.batch(statements);
       await audit(env, user.id, "update", "package", id, body, request);
@@ -636,9 +654,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     const items = (await env.DB.prepare(`
       SELECT package_items.*, services.slug AS service_slug, services.name_en AS service_name_en,
         services.name_fr AS service_name_fr, services.description_en AS service_description_en,
-        services.description_fr AS service_description_fr, services.duration_minutes
+        services.description_fr AS service_description_fr, services.duration_minutes,
+        prereq.slug AS prerequisite_service_slug
       FROM package_items
       JOIN services ON services.id = package_items.service_id
+      LEFT JOIN services prereq ON prereq.id = package_items.prerequisite_service_id
       WHERE package_items.package_id IN (${ids.map(() => "?").join(",")})
     `).bind(...ids).all<Parameters<typeof packageResponse>[1][number]>()).results;
     return json(rows.results.map((row) => packageResponse(row, items)));
