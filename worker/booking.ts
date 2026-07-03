@@ -643,6 +643,43 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? template.notification_email.split(/[,\n;]/).map((value) => value.trim()).filter(Boolean)
     : [];
 
+  // Send the per-booking Brevo emails (student confirmation + staff notification). A booking is
+  // valid the moment it is saved, so people are notified even if calendar-event creation later
+  // fails — the emails do not depend on Google. Guarded by notifications_sent_at so they go out
+  // exactly once even though the cron may retry a failed sync many times. Always best-effort:
+  // failures are recorded on notify_last_error and never change the booking's sync status.
+  const sendBookingEmails = async () => {
+    if (booking.notifications_sent_at) return; // already sent on an earlier attempt
+    const emailErrors: string[] = [];
+
+    // Emails carry the SAME content as the calendar event (summary + description), so recipients
+    // get exactly what the invitation would have contained — reference, student, date/time, price,
+    // visible form fields, package schedule, and the manage link (all already composed above).
+    if (booking.student_email) {
+      const studentResult = await sendStaffNotification(env, {
+        to: [booking.student_email],
+        subject: `Booking confirmed: ${summary}`,
+        text: `${description}\n`
+      });
+      if (!studentResult.ok) emailErrors.push(`student: ${studentResult.error}`);
+    }
+
+    if (notifyEmails.length) {
+      const notifyResult = await sendStaffNotification(env, {
+        to: notifyEmails,
+        subject: `New booking: ${summary}`,
+        text: `${description}\n`
+      });
+      if (!notifyResult.ok) emailErrors.push(`staff: ${notifyResult.error}`);
+    }
+
+    // Mark sent (so retries don't re-email) and record any failures for admin visibility.
+    booking.notifications_sent_at = new Date().toISOString();
+    await env.DB.prepare(
+      "UPDATE bookings SET notifications_sent_at = CURRENT_TIMESTAMP, notify_last_error = ? WHERE id = ?"
+    ).bind(emailErrors.length ? emailErrors.join(" | ").slice(0, 500) : null, bookingId).run();
+  };
+
   let canonicalEventId = await findReusableCalendarEvent(env, bookingId, canonical.calendar_id, "canonical");
   if (!canonicalEventId) {
     // Grant staff inboxes reader access to the canonical calendar before the event is created.
@@ -653,81 +690,36 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     for (const staffEmail of notifyEmails) {
       await shareCalendar(env, canonical.calendar_id, staffEmail, "reader");
     }
-    // sendUpdates=false: do NOT ask Google to email invitations. Google's per-account invitation
-    // quota ("Calendar usage limits exceeded.") is easy to trip on a free Gmail account and, once
-    // tripped, throttles ALL invites — including a single legitimate student, which fails the whole
-    // booking sync. We decouple from that quota entirely: the event is created with no invitation,
-    // and the student + staff are emailed directly via Brevo below. Staff also see the event via the
-    // reader ACL granted above.
-    canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
-      summary,
-      description,
-      start: booking.start_at,
-      end: booking.end_at,
-      timezone: booking.timezone,
-      attendeeEmail: booking.student_email || undefined,
-      bookingId,
-      reference: booking.reference
-    }, false);
-    await env.DB.prepare(`
-      INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
-      VALUES (?, ?, ?, ?, 'canonical', 'synced')
-    `).bind(uuid(), bookingId, canonical.calendar_id, canonicalEventId).run();
-
-    // Per-booking emails via Brevo. This block only runs when the canonical event is first created,
-    // so it fires once per booking (not on retries/resyncs, which reuse the event). All sends are
-    // strictly best-effort — a failure is recorded on notify_last_error but never affects the
-    // booking's calendar sync status. Booking success no longer depends on Google's invite quota.
-    const emailErrors: string[] = [];
-
-    // Student confirmation (replaces the Google calendar invitation).
-    if (booking.student_email) {
-      const studentBody = [
-        `Your booking is confirmed — ${fields.reference}`,
-        "",
-        `Service: ${fields.service}`,
-        `Center: ${fields.center}`,
-        fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
-        fields.duration ? `Duration: ${fields.duration}` : "",
-        fields.price ? `Price: ${fields.price}` : "",
-        manageUrl ? `\nManage or cancel your booking: ${manageUrl}` : ""
-      ].filter(Boolean).join("\n");
-      const studentResult = await sendStaffNotification(env, {
-        to: [booking.student_email],
-        subject: `Booking confirmed: ${fields.service} — ${fields.dateTime || fields.reference}`,
-        text: studentBody
-      });
-      if (!studentResult.ok) emailErrors.push(`student: ${studentResult.error}`);
+    try {
+      // sendUpdates=false: do NOT ask Google to email invitations. Google's per-account invitation
+      // quota ("Calendar usage limits exceeded.") is easy to trip on a free Gmail account and, once
+      // tripped, throttles ALL invites — failing the whole booking sync. We decouple from that quota
+      // entirely: the event is created with no invitation, and the student + staff are emailed via
+      // Brevo. Staff also see the event via the reader ACL granted above.
+      canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
+        summary,
+        description,
+        start: booking.start_at,
+        end: booking.end_at,
+        timezone: booking.timezone,
+        attendeeEmail: booking.student_email || undefined,
+        bookingId,
+        reference: booking.reference
+      }, false);
+      await env.DB.prepare(`
+        INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
+        VALUES (?, ?, ?, ?, 'canonical', 'synced')
+      `).bind(uuid(), bookingId, canonical.calendar_id, canonicalEventId).run();
+    } catch (error) {
+      // The booking is still valid even if the calendar event could not be created, so notify the
+      // student and staff anyway, then re-throw so the caller marks the sync failed for cron retry.
+      await sendBookingEmails();
+      throw error;
     }
-
-    // Staff notification. Staff also see the booking via the calendar reader ACL granted above;
-    // this is the email ping into their inbox.
-    if (notifyEmails.length) {
-      const notifyBody = [
-        `New booking confirmed — ${fields.reference}`,
-        "",
-        `Service: ${fields.service}`,
-        `Center: ${fields.center}`,
-        `Student: ${fields.student}`,
-        fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
-        fields.duration ? `Duration: ${fields.duration}` : "",
-        fields.visibleFields,
-        manageUrl ? `\nManage: ${manageUrl}` : ""
-      ].filter(Boolean).join("\n");
-      const notifyResult = await sendStaffNotification(env, {
-        to: notifyEmails,
-        subject: `New booking: ${fields.service} — ${fields.dateTime || fields.reference}`,
-        text: notifyBody
-      });
-      if (!notifyResult.ok) emailErrors.push(`staff: ${notifyResult.error}`);
-    }
-
-    // Record any email failures so a silent misconfiguration (e.g. an unverified Brevo sender)
-    // is visible to admins instead of vanishing. NULL means all sends succeeded (or none were due).
-    await env.DB.prepare("UPDATE bookings SET notify_last_error = ? WHERE id = ?")
-      .bind(emailErrors.length ? emailErrors.join(" | ").slice(0, 500) : null, bookingId)
-      .run();
   }
+
+  // Canonical event exists (created now or reused) — send the emails once.
+  await sendBookingEmails();
 
   const allocatedResources = (await env.DB.prepare(`
     SELECT DISTINCT resources.calendar_id FROM booking_resource_allocations
