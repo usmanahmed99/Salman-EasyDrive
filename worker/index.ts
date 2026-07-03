@@ -3,7 +3,7 @@ import type { BookingForm } from "../shared/types";
 import { validateBookingForm } from "../shared/types";
 import { getSlots } from "./availability";
 import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
-import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
+import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, sendBookingLifecycleEmail, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
 import { confirmPackageBooking, packageResponse, reserveSession, type PackageBookingPayload } from "./package";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
 import { reconcileCalendar, retryFailedSyncs } from "./reconcile";
@@ -735,6 +735,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       console.error("[cancel] calendar cleanup failed", error);
       return { failed: 1 };
     });
+    await sendBookingLifecycleEmail(env, booking.id, "cancelled");
     return json({ reference: booking.reference, status: "cancelled_by_student", calendarCleanup: cleanup });
   }
   const rescheduleMatch = path.match(/^\/api\/public\/bookings\/([^/]+)\/reschedule$/);
@@ -938,6 +939,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         console.error("[cancel] calendar cleanup failed", error);
         return { failed: 1 };
       });
+      await sendBookingLifecycleEmail(env, adminCancelMatch[1], "cancelled");
       await audit(env, user.id, "cancel", "booking", adminCancelMatch[1], {}, request);
       return json({ id: adminCancelMatch[1], status: "cancelled_by_admin", calendarCleanup: cleanup });
     }
