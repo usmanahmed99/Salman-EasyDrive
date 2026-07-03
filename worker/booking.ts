@@ -684,11 +684,16 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
         fields.visibleFields,
         manageUrl ? `\nManage: ${manageUrl}` : ""
       ].filter(Boolean).join("\n");
-      await sendStaffNotification(env, {
+      const notifyResult = await sendStaffNotification(env, {
         to: notifyEmails,
         subject: `New booking: ${fields.service} — ${fields.dateTime || fields.reference}`,
         text: notifyBody
       });
+      // Record the outcome so a silent email failure (e.g. an unverified Brevo sender) is visible
+      // to admins instead of vanishing. Best-effort: this never affects the booking's sync status.
+      await env.DB.prepare("UPDATE bookings SET notify_last_error = ? WHERE id = ?")
+        .bind(notifyResult.ok ? null : (notifyResult.error || "email send failed"), bookingId)
+        .run();
     }
   }
 
