@@ -1,6 +1,66 @@
 import type { Env } from "./types";
 import { getCalendarEvent, deleteCalendarEvent } from "./google";
+import { syncBookingCalendar } from "./booking";
 import { HttpError } from "./utils";
+
+// Bookings whose calendar sync failed transiently (most often Google's per-account
+// "Calendar usage limits exceeded." invitation quota) are retried by the cron until they
+// succeed or hit this cap. At one attempt per 30-min tick, the cap gives ~a day of retries —
+// long enough for any rolling quota window to clear — before we stop and leave the booking
+// for a manual admin Retry, so a genuinely-broken booking doesn't retry forever.
+const MAX_SYNC_ATTEMPTS = 10;
+// Per-run ceiling so a large backlog can't exhaust Worker CPU or re-trip the quota in one tick.
+const RETRY_BATCH_SIZE = 20;
+
+// Google's invitation-quota error is transient — the whole point of retrying. When we see it,
+// stop the run immediately: continuing would just keep hitting the limit and burn attempts.
+function isQuotaError(error: unknown): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  return message.includes("usage limit") || message.includes("rate limit") || message.includes("ratelimit");
+}
+
+/**
+ * Retry bookings stuck in calendar_sync_status='failed'. syncBookingCalendar is idempotent and
+ * flips the booking to 'synced' (resetting the attempt counter) on success, or re-records the
+ * error on failure. We only touch future bookings (a past slot's invite is moot), cap attempts
+ * per booking (MAX_SYNC_ATTEMPTS) and per run (RETRY_BATCH_SIZE), and bail early the moment Google
+ * signals a quota error so we don't hammer a rate-limited account — the next tick resumes.
+ */
+export async function retryFailedSyncs(env: Env): Promise<{ retried: number; recovered: number; quotaStopped: boolean }> {
+  const now = new Date().toISOString();
+  const rows = (await env.DB.prepare(`
+    SELECT id FROM bookings
+    WHERE calendar_sync_status = 'failed'
+      AND calendar_sync_attempts < ?
+      AND start_at > ?
+    ORDER BY start_at
+    LIMIT ?
+  `).bind(MAX_SYNC_ATTEMPTS, now, RETRY_BATCH_SIZE).all<{ id: string }>()).results;
+
+  let retried = 0;
+  let recovered = 0;
+  for (const row of rows) {
+    // Count the attempt up front so a booking that keeps failing still advances toward the cap.
+    await env.DB.prepare(
+      "UPDATE bookings SET calendar_sync_attempts = calendar_sync_attempts + 1 WHERE id = ?"
+    ).bind(row.id).run();
+    retried += 1;
+    try {
+      const result = await syncBookingCalendar(env, row.id);
+      if (result.status === "synced") recovered += 1;
+    } catch (error) {
+      // syncBookingCalendar already re-recorded the error on the booking. A quota error means the
+      // account is rate-limited right now, so stop the whole run and let the next tick resume.
+      if (isQuotaError(error)) {
+        console.log(`[reconcile] retry stopped early on quota limit after ${retried} attempt(s)`);
+        return { retried, recovered, quotaStopped: true };
+      }
+    }
+  }
+
+  if (retried) console.log(`[reconcile] retried ${retried} failed sync(s), ${recovered} recovered`);
+  return { retried, recovered, quotaStopped: false };
+}
 
 interface OpenCenter {
   id: string;

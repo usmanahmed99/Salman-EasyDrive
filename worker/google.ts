@@ -117,8 +117,6 @@ export async function createCalendarEvent(
     end: string;
     timezone: string;
     attendeeEmail?: string;
-    /** Extra address(es) that should receive the invite (e.g. the staff booking-notification inbox). */
-    notifyEmails?: string[];
     bookingId: string;
     reference: string;
   },
@@ -136,15 +134,15 @@ export async function createCalendarEvent(
         description: event.description,
         start: { dateTime: event.start, timeZone: event.timezone },
         end: { dateTime: event.end, timeZone: event.timezone },
-        // Attendees only matter when Google should email them (sendUpdates). The student (if any)
-        // plus any staff notification addresses are merged and de-duplicated.
+        // The student is the only invited attendee (gets the invite email when sendUpdates=all).
+        // Staff notification inboxes are NOT invited per-event — they are granted reader ACL on the
+        // calendar once (see syncBookingCalendar), so they see every booking at zero invitation cost.
+        // Re-inviting a fixed staff address on every booking trips Google's per-recipient invitation
+        // guard ("Calendar usage limits exceeded.").
         attendees: (() => {
           if (!sendUpdates) return undefined;
-          const emails = [event.attendeeEmail, ...(event.notifyEmails || [])]
-            .map((value) => value?.trim())
-            .filter((value): value is string => Boolean(value));
-          const unique = [...new Set(emails.map((value) => value.toLowerCase()))];
-          return unique.length ? unique.map((email) => ({ email })) : undefined;
+          const student = event.attendeeEmail?.trim().toLowerCase();
+          return student ? [{ email: student }] : undefined;
         })(),
         extendedProperties: {
           private: {

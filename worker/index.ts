@@ -6,7 +6,7 @@ import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback
 import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
 import { confirmPackageBooking, packageResponse, reserveSession, type PackageBookingPayload } from "./package";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
-import { reconcileCalendar } from "./reconcile";
+import { reconcileCalendar, retryFailedSyncs } from "./reconcile";
 import type { DbCenter, DbService, Env } from "./types";
 import {
   assertTrustedOrigin,
@@ -851,9 +851,29 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         const title = body.titleTemplate?.trim() ? body.titleTemplate : null;
         const description = body.descriptionTemplate?.trim() ? body.descriptionTemplate : null;
         const descriptionFr = body.descriptionTemplateFr?.trim() ? body.descriptionTemplateFr : null;
-        const notificationEmailRaw = body.notificationEmail?.trim() || null;
-        if (notificationEmailRaw && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(notificationEmailRaw)) {
-          throw new HttpError(400, "Please enter a valid notification email address.", "invalid_email");
+        // Notification email accepts a comma/newline-separated list. Each address is validated,
+        // de-duplicated (case-insensitively), then stored back as a clean comma-separated string.
+        let notificationEmailRaw: string | null = null;
+        if (body.notificationEmail?.trim()) {
+          const emails = body.notificationEmail
+            .split(/[,\n;]/)
+            .map((value) => value.trim())
+            .filter(Boolean);
+          for (const email of emails) {
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+              throw new HttpError(400, `"${email}" is not a valid email address.`, "invalid_email");
+            }
+          }
+          const unique: string[] = [];
+          const seen = new Set<string>();
+          for (const email of emails) {
+            const key = email.toLowerCase();
+            if (!seen.has(key)) {
+              seen.add(key);
+              unique.push(email);
+            }
+          }
+          notificationEmailRaw = unique.length ? unique.join(", ") : null;
         }
         await env.DB.prepare(`
           UPDATE calendar_event_settings
@@ -893,8 +913,22 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
     }
     const resyncMatch = path.match(/^\/api\/admin\/bookings\/([^/]+)\/resync-calendar$/);
     if (resyncMatch && method === "POST") {
-      const result = await syncBookingCalendar(env, resyncMatch[1]);
-      return json(result);
+      const bookingId = resyncMatch[1];
+      try {
+        const result = await syncBookingCalendar(env, bookingId);
+        return json(result);
+      } catch (error) {
+        // syncBookingCalendar throws plain Errors (e.g. Google's "Calendar usage limits exceeded."
+        // quota error, or a missing calendar mapping). Persist the reason on the booking and return
+        // it to the admin instead of a generic 500, so they can tell a transient quota blip (which
+        // the cron auto-retries) apart from a real config problem.
+        const message = error instanceof Error ? error.message : "Calendar sync failed";
+        await env.DB.prepare(`
+          UPDATE bookings SET status='calendar_sync_failed', calendar_sync_status='failed',
+          calendar_last_error=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+        `).bind(message.slice(0, 500), bookingId).run();
+        return json({ error: `Calendar sync failed: ${message}`, code: "calendar_sync_failed" }, 502);
+      }
     }
     const adminCancelMatch = path.match(/^\/api\/admin\/bookings\/([^/]+)\/cancel$/);
     if (adminCancelMatch && method === "POST") {
@@ -1220,6 +1254,9 @@ export default {
     // Cron fires every 30 min for calendar reconciliation; reconcile gates itself to
     // centers within working hours and is cheap when everyone is closed.
     ctx.waitUntil(reconcileCalendar(env).catch((error) => console.error("[reconcile] failed", error)));
+    // Retry bookings whose calendar sync failed transiently (e.g. Google invitation quota),
+    // so a rate-limit blip self-heals within a day instead of needing a manual admin Retry.
+    ctx.waitUntil(retryFailedSyncs(env).catch((error) => console.error("[reconcile] retry failed", error)));
     // Retention is a once-a-day job: only run it on the early-morning tick.
     const now = new Date();
     if (now.getUTCHours() === 5 && now.getUTCMinutes() < 30) {
