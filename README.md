@@ -110,6 +110,11 @@ prod are separate Cloudflare accounts). Work on `dev` → auto-deploys dev; merg
 → auto-deploys prod (after the `production` environment's approval gate, if a reviewer is set).
 Prod-specific config lives under `[env.production]` in `wrangler.toml`.
 
+> CI deploys **code and D1 migrations only** — it never sets Worker **secrets**. A new secret
+> (e.g. `BREVO_API_KEY`) or new DNS record (SPF/DKIM/DMARC for email) is a one-time manual step
+> per Cloudflare account, done with `wrangler secret put` / the Cloudflare dashboard **before**
+> the code that relies on it goes live. See [`docs/technical-setup.md`](docs/technical-setup.md) §17a.
+
 A copy-paste quickstart. For the full walkthrough (consent screen, custom domain, monitoring,
 backup, pre-launch checklist) see [`docs/technical-setup.md`](docs/technical-setup.md) §10–16.
 For the live launch at `easydriving.nextiadriveops.com`, follow the domain-specific guide:
@@ -148,7 +153,13 @@ npx wrangler secret put GOOGLE_CLIENT_SECRET
 npx wrangler secret put SESSION_SECRET          # long random; do NOT reuse for encryption
 npx wrangler secret put TOKEN_ENCRYPTION_KEY    # long random; distinct from SESSION_SECRET
 npx wrangler secret put TURNSTILE_SECRET_KEY    # optional, only if Turnstile is enabled
+npx wrangler secret put BREVO_API_KEY           # optional, staff booking-notification email
 ```
+
+Secrets are **per Cloudflare account** and are **not** deployed by CI — set them once per
+environment with `wrangler whoami` confirming the right account, appending `--env production`
+for prod. For the staff notification email (Brevo) + its SPF/DKIM/DMARC DNS setup, see
+[`docs/technical-setup.md`](docs/technical-setup.md) §17a.
 
 **4. Run checks, then deploy the Worker and the Pages frontend:**
 

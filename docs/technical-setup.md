@@ -467,8 +467,13 @@ npx wrangler secret put TOKEN_ENCRYPTION_KEY
 Optional:
 
 ```bash
-npx wrangler secret put TURNSTILE_SECRET_KEY
+npx wrangler secret put TURNSTILE_SECRET_KEY   # only if Turnstile is enabled
+npx wrangler secret put BREVO_API_KEY          # staff booking-notification email — see §17a
 ```
+
+For production, append `--env production` to each `secret put`, and set the secret **while logged
+into that environment's Cloudflare account** (dev and prod are separate accounts — verify with
+`wrangler whoami`).
 
 Never put secret values in `wrangler.toml`.
 
@@ -665,6 +670,96 @@ raise `min-height` if it gets clipped.
 
 > The backend verification is implemented. The current public form still needs the visible Turnstile widget connected before enabling the secret in production.
 
+## 17a. Staff booking-notification email (Brevo)
+
+Staff notification is delivered two ways, both driven by the **Notification email** set in
+Admin → Google Calendar (`calendar_event_settings.notification_email`, a comma/semicolon/newline
+separated list):
+
+1. **Calendar visibility (always).** On a booking's first calendar sync, each notification
+   address is granted **reader ACL** on the canonical Google Calendar (once, idempotent). Staff
+   then see every booking on that calendar at zero per-booking cost.
+2. **Per-booking email (optional).** If `BREVO_API_KEY` is set, the Worker also sends one plain
+   notification email per booking via Brevo's HTTP API (`worker/email.ts`).
+
+> **Why not just invite staff to the event?** Adding the same fixed staff address as a calendar
+> **attendee** on every booking re-sends an invitation to that one recipient repeatedly, which
+> trips Google's per-recipient anti-abuse guard — surfaced as **"Calendar usage limits exceeded."**
+> The ACL-plus-email approach gives staff the same visibility *and* an email ping without ever
+> re-inviting them, so the quota/spam-throttle error cannot occur.
+
+### Why Brevo (and not Cloudflare Email Routing)
+
+`easydriving.ca`'s MX record points at **Microsoft 365** (`info@easydriving.ca` is a live Outlook
+mailbox). Cloudflare Email Routing would **seize the domain's MX** and break inbound mail, so it is
+not usable here. Brevo sends *outbound* over HTTPS and needs no MX change — the notification simply
+lands in the existing Outlook inbox. Free tier (300 emails/day) covers the expected volume.
+
+Email sending is **strictly best-effort**: an unset `BREVO_API_KEY`, an empty notification list, or
+any API failure is logged and skipped — it never blocks or fails a booking's calendar sync. It also
+fires **once per booking** (only when the canonical event is first created; retries/resyncs reuse
+the event and skip the email).
+
+### Step 1 — Brevo account and API key
+
+1. Create a Brevo account.
+2. Verify a sender address matching `NOTIFY_FROM_EMAIL` (default `notifications@easydriving.ca`).
+3. Create a **transactional** API key (SMTP & API → API Keys). This is the `BREVO_API_KEY` value.
+
+### Step 2 — DNS authentication (SPF, DKIM, DMARC)
+
+Add these in the **Cloudflare DNS** zone for `easydriving.ca`. **None of them touch the MX record**,
+so Microsoft 365 inbound mail is unaffected. Copy the exact host/value from Brevo's Domains page.
+
+| Record | Type | Host | Value | Proxy |
+|---|---|---|---|---|
+| DKIM #1 | CNAME | `brevo1._domainkey` | `b1.easydriving-ca.dkim.brevo.com` | **DNS only** |
+| DKIM #2 | CNAME | `brevo2._domainkey` | `b2.easydriving-ca.dkim.brevo.com` | **DNS only** |
+| Brevo verify | TXT | `@` | `brevo-code:…` (from Brevo) | — |
+| DMARC | TXT | `_dmarc` | `v=DMARC1; p=none; rua=mailto:rua@dmarc.brevo.com` | — |
+
+**SPF is special — edit the existing record, do NOT add a second one.** `easydriving.ca` already has
+an SPF record for Outlook. Merge Brevo into it so there is exactly one SPF record:
+
+```text
+v=spf1 include:spf.protection.outlook.com include:spf.brevo.com -all
+```
+
+Then click **Authenticate/Verify** on Brevo's Domains page. Verify propagation with:
+
+```bash
+nslookup -type=TXT easydriving.ca 1.1.1.1        # SPF must show BOTH includes
+nslookup -type=CNAME brevo1._domainkey.easydriving.ca 1.1.1.1
+nslookup -type=TXT _dmarc.easydriving.ca 1.1.1.1
+```
+
+### Step 3 — Worker configuration
+
+`NOTIFY_FROM_EMAIL` is a non-secret var in `wrangler.toml` (already set for both the default/dev and
+`[env.production.vars]` blocks). `BREVO_API_KEY` is a **secret** and must be set **per Cloudflare
+account** — it is not deployed by CI (the GitHub Actions only deploy code, never secrets):
+
+```bash
+# Dev — while logged into the personal/dev Cloudflare account (default env):
+npx wrangler whoami                 # confirm the DEV account
+npx wrangler secret put BREVO_API_KEY
+
+# Prod — while logged into the CLIENT Cloudflare account:
+npx wrangler whoami                 # confirm the CLIENT account
+npx wrangler secret put BREVO_API_KEY --env production
+```
+
+Confirm it is present in the right account:
+
+```bash
+npx wrangler secret list                 # dev (default env)
+npx wrangler secret list --env production # prod
+```
+
+If `BREVO_API_KEY` is missing in an account, that environment silently sends no staff emails (staff
+still get calendar visibility via ACL). If a stray `BREVO_API_KEY` ends up on the wrong account's
+worker, remove it: `npx wrangler secret delete BREVO_API_KEY [--env production]`.
+
 ## 18. Admin screen wiring status
 
 The admin portal is now wired to the live REST APIs. The backend exposes CRUD endpoints for:
@@ -828,7 +923,9 @@ npm run deploy:web
   {visibleFields}`), with built-in defaults when unset;
 - Calendar push notifications are not enabled;
 - the Form Builder does not yet include an advanced validation/options editor;
-- email delivery beyond Google Calendar invitations is not included;
+- staff booking notifications are delivered via calendar reader ACL plus an optional per-booking
+  Brevo email (see §17a); student-facing email beyond the Google Calendar invitation is not yet
+  included;
 - the public booking page uses demo fallbacks when APIs fail (admin uses live data only);
 - Playwright end-to-end tests are not yet part of the default test suite.
 
