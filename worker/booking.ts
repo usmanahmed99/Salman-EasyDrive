@@ -653,6 +653,12 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     for (const staffEmail of notifyEmails) {
       await shareCalendar(env, canonical.calendar_id, staffEmail, "reader");
     }
+    // sendUpdates=false: do NOT ask Google to email invitations. Google's per-account invitation
+    // quota ("Calendar usage limits exceeded.") is easy to trip on a free Gmail account and, once
+    // tripped, throttles ALL invites — including a single legitimate student, which fails the whole
+    // booking sync. We decouple from that quota entirely: the event is created with no invitation,
+    // and the student + staff are emailed directly via Brevo below. Staff also see the event via the
+    // reader ACL granted above.
     canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
       summary,
       description,
@@ -662,16 +668,40 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
       attendeeEmail: booking.student_email || undefined,
       bookingId,
       reference: booking.reference
-    }, true);
+    }, false);
     await env.DB.prepare(`
       INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
       VALUES (?, ?, ?, ?, 'canonical', 'synced')
     `).bind(uuid(), bookingId, canonical.calendar_id, canonicalEventId).run();
 
-    // Per-booking staff email ping. This block only runs when the canonical event is first
-    // created, so it fires once per booking (not on retries/resyncs, which reuse the event).
-    // Staff still see the booking via calendar reader ACL granted above; this adds an actual
-    // email into their Outlook inbox. Best-effort: a send failure never blocks the sync.
+    // Per-booking emails via Brevo. This block only runs when the canonical event is first created,
+    // so it fires once per booking (not on retries/resyncs, which reuse the event). All sends are
+    // strictly best-effort — a failure is recorded on notify_last_error but never affects the
+    // booking's calendar sync status. Booking success no longer depends on Google's invite quota.
+    const emailErrors: string[] = [];
+
+    // Student confirmation (replaces the Google calendar invitation).
+    if (booking.student_email) {
+      const studentBody = [
+        `Your booking is confirmed — ${fields.reference}`,
+        "",
+        `Service: ${fields.service}`,
+        `Center: ${fields.center}`,
+        fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
+        fields.duration ? `Duration: ${fields.duration}` : "",
+        fields.price ? `Price: ${fields.price}` : "",
+        manageUrl ? `\nManage or cancel your booking: ${manageUrl}` : ""
+      ].filter(Boolean).join("\n");
+      const studentResult = await sendStaffNotification(env, {
+        to: [booking.student_email],
+        subject: `Booking confirmed: ${fields.service} — ${fields.dateTime || fields.reference}`,
+        text: studentBody
+      });
+      if (!studentResult.ok) emailErrors.push(`student: ${studentResult.error}`);
+    }
+
+    // Staff notification. Staff also see the booking via the calendar reader ACL granted above;
+    // this is the email ping into their inbox.
     if (notifyEmails.length) {
       const notifyBody = [
         `New booking confirmed — ${fields.reference}`,
@@ -689,12 +719,14 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
         subject: `New booking: ${fields.service} — ${fields.dateTime || fields.reference}`,
         text: notifyBody
       });
-      // Record the outcome so a silent email failure (e.g. an unverified Brevo sender) is visible
-      // to admins instead of vanishing. Best-effort: this never affects the booking's sync status.
-      await env.DB.prepare("UPDATE bookings SET notify_last_error = ? WHERE id = ?")
-        .bind(notifyResult.ok ? null : (notifyResult.error || "email send failed"), bookingId)
-        .run();
+      if (!notifyResult.ok) emailErrors.push(`staff: ${notifyResult.error}`);
     }
+
+    // Record any email failures so a silent misconfiguration (e.g. an unverified Brevo sender)
+    // is visible to admins instead of vanishing. NULL means all sends succeeded (or none were due).
+    await env.DB.prepare("UPDATE bookings SET notify_last_error = ? WHERE id = ?")
+      .bind(emailErrors.length ? emailErrors.join(" | ").slice(0, 500) : null, bookingId)
+      .run();
   }
 
   const allocatedResources = (await env.DB.prepare(`
