@@ -21,17 +21,30 @@ interface StaffNotification {
   text: string;
 }
 
+/**
+ * Result of a staff-notification send. `ok: true` means Brevo accepted the message (or there was
+ * nothing to do — no key/recipients). On failure, `error` is a short reason the caller can persist
+ * on the booking so a silent misconfiguration (e.g. an unverified Brevo sender) surfaces to admins.
+ */
+export interface StaffNotificationResult {
+  ok: boolean;
+  error?: string;
+}
+
 const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
 
-export async function sendStaffNotification(env: Env, notification: StaffNotification): Promise<boolean> {
+export async function sendStaffNotification(
+  env: Env,
+  notification: StaffNotification
+): Promise<StaffNotificationResult> {
   if (!env.BREVO_API_KEY) {
-    // No key configured — notifications are opt-in. Not an error.
-    return false;
+    // No key configured — notifications are opt-in. Not an error, nothing to record.
+    return { ok: true };
   }
   const recipients = notification.to
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value));
-  if (!recipients.length) return false;
+  if (!recipients.length) return { ok: true };
 
   const fromEmail = env.NOTIFY_FROM_EMAIL?.trim() || "notifications@easydriving.ca";
   try {
@@ -52,13 +65,15 @@ export async function sendStaffNotification(env: Env, notification: StaffNotific
       })
     });
     if (!response.ok) {
-      console.error("[email] staff notification failed", response.status, await response.text());
-      return false;
+      const detail = await response.text();
+      console.error("[email] staff notification failed", response.status, detail);
+      // Surface a compact, admin-readable reason (Brevo returns JSON like {"message":"..."}).
+      return { ok: false, error: `Brevo ${response.status}: ${detail.slice(0, 200)}` };
     }
-    return true;
+    return { ok: true };
   } catch (error) {
     console.error("[email] staff notification threw", error);
-    return false;
+    return { ok: false, error: error instanceof Error ? error.message : "email send failed" };
   }
 }
 

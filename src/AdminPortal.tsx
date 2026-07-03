@@ -3115,9 +3115,10 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
           <div className="border-b border-slate-100 p-5">
             <h2 className="font-extrabold text-ink">Booking notifications</h2>
             <p className="mt-1 text-xs text-slate-500">
-              Add one or more staff inboxes (e.g. info@easydriving.ca) as attendees on every booking's calendar event,
-              so they receive an invite email for each new booking — public, admin, and every package session.
-              Separate multiple addresses with commas. Leave blank to turn notifications off.
+              Add one or more staff inboxes (e.g. info@easydriving.ca) to be notified of every new booking —
+              public, admin, and every package session. Each inbox is given read access to the booking calendar
+              (so every booking shows up there) and receives a notification email per booking. Separate multiple
+              addresses with commas. Leave blank to turn notifications off.
             </p>
           </div>
           <div className="space-y-4 p-5">
@@ -3132,8 +3133,8 @@ function CalendarScreen({ centers, services, resources, mappings, connections, r
               />
             </label>
             <p className="text-xs text-slate-400">
-              Requires Google Calendar to be connected (invites are sent through it). If calendar sync fails for a
-              booking, no notification is sent for that one.
+              Requires Google Calendar to be connected. Staff are not added as event attendees, so no repeated
+              calendar invites are sent. If calendar sync fails for a booking, no notification is sent for that one.
             </p>
             <div className="flex justify-end">
               <button className="primary-button min-h-10 w-full px-4 py-2 sm:w-auto" disabled={savingNotify} onClick={saveNotificationEmail}>
