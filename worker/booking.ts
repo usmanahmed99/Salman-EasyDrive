@@ -442,6 +442,7 @@ export interface AdminRescheduleResult {
 export async function rescheduleAdminBooking(env: Env, bookingId: string, newStart: string) {
   const booking = await env.DB.prepare(`
     SELECT bookings.id, bookings.reference, bookings.center_id, bookings.timezone, bookings.manage_token,
+      bookings.start_at AS previous_start,
       centers.slug AS center_slug, services.slug AS service_slug
     FROM bookings
     JOIN centers ON centers.id = bookings.center_id
@@ -449,7 +450,7 @@ export async function rescheduleAdminBooking(env: Env, bookingId: string, newSta
     WHERE bookings.id = ?
   `).bind(bookingId).first<{
     id: string; reference: string; center_id: string; timezone: string; manage_token: string | null;
-    center_slug: string; service_slug: string;
+    previous_start: string; center_slug: string; service_slug: string;
   }>();
   if (!booking) throw new HttpError(404, "Booking not found.");
 
@@ -508,6 +509,10 @@ export async function rescheduleAdminBooking(env: Env, bookingId: string, newSta
     `).bind(message.slice(0, 500), bookingId).run();
     return { status: "failed" as const };
   });
+
+  // Notify the student + staff of the new time. Best-effort; runs regardless of sync status since
+  // the booking itself has moved. start_at is already the new time; pass the captured old one.
+  await sendBookingLifecycleEmail(env, bookingId, "rescheduled", booking.previous_start);
 
   return {
     id: bookingId,
@@ -828,10 +833,12 @@ async function findReusableCalendarEvent(
   return null;
 }
 
-// Removes the booking's Google events when it is cancelled. The canonical event is
-// deleted with sendUpdates=all so Google emails the student a cancellation; internal
-// resource blocks are deleted silently (no attendees) which also frees instructor FreeBusy.
-// Deletion is idempotent (see deleteCalendarEvent), so a partial earlier sync is safe.
+// Removes the booking's Google events when it is cancelled. All events are deleted with
+// sendUpdates=false — we do NOT ask Google to email a cancellation (that uses the per-account
+// invitation quota that trips "Calendar usage limits exceeded."). The student/staff cancellation
+// email is sent via Brevo by sendBookingLifecycleEmail instead. Internal resource blocks never had
+// attendees anyway; deleting them also frees instructor FreeBusy. Deletion is idempotent (see
+// deleteCalendarEvent), so a partial earlier sync is safe.
 export async function cancelBookingCalendar(env: Env, bookingId: string) {
   const events = (await env.DB.prepare(`
     SELECT id, calendar_id, google_event_id, event_role
@@ -842,7 +849,7 @@ export async function cancelBookingCalendar(env: Env, bookingId: string) {
   const errors: string[] = [];
   for (const event of events) {
     try {
-      await deleteCalendarEvent(env, event.calendar_id, event.google_event_id, event.event_role === "canonical");
+      await deleteCalendarEvent(env, event.calendar_id, event.google_event_id, false);
       await env.DB.prepare(
         "UPDATE booking_calendar_events SET sync_status = 'deleted', last_error = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
       ).bind(event.id).run();
@@ -855,6 +862,112 @@ export async function cancelBookingCalendar(env: Env, bookingId: string) {
     }
   }
   return { deleted: events.length - errors.length, failed: errors.length, errors };
+}
+
+/**
+ * Send a branded Brevo email to the student and staff notification inbox(es) for a booking
+ * lifecycle change (cancellation or reschedule). Best-effort: any failure is logged and swallowed
+ * so it never affects the cancel/reschedule operation itself. Unlike the confirmation email this is
+ * NOT guarded by notifications_sent_at — each lifecycle event is a distinct message that should
+ * always go out. For a reschedule, pass `previousStart` (the ISO time before the move) so the email
+ * can show both old and new times; the booking row's start_at is already the NEW time by then.
+ */
+export async function sendBookingLifecycleEmail(
+  env: Env,
+  bookingId: string,
+  kind: "cancelled" | "rescheduled",
+  previousStart?: string
+): Promise<void> {
+  try {
+    const booking = await env.DB.prepare(`
+      SELECT bookings.reference, bookings.timezone, bookings.start_at, bookings.language,
+        centers.name AS center_name, services.name_en, services.name_fr,
+        booking_form_responses.student_name, booking_form_responses.student_email
+      FROM bookings
+      JOIN centers ON centers.id = bookings.center_id
+      JOIN services ON services.id = bookings.service_id
+      LEFT JOIN booking_form_responses ON booking_form_responses.booking_id = bookings.id
+      WHERE bookings.id = ?
+    `).bind(bookingId).first<Record<string, string>>();
+    if (!booking) return;
+
+    const isFr = booking.language === "fr";
+    const service = isFr ? (booking.name_fr || booking.name_en) : booking.name_en;
+    const center = booking.center_name;
+    const reference = booking.reference;
+    // For a cancellation, `when` is the booking's (only) time. For a reschedule, the row's start_at
+    // is already the NEW time, and previousStart carries the old one.
+    const when = formatBookingDateTime(booking.start_at, booking.timezone, isFr);
+    const previousWhen = previousStart ? formatBookingDateTime(previousStart, booking.timezone, isFr) : "";
+
+    const template = await env.DB.prepare(
+      "SELECT notification_email FROM calendar_event_settings WHERE id = 'default'"
+    ).first<{ notification_email: string | null }>();
+    const notifyEmails = template?.notification_email?.trim()
+      ? template.notification_email.split(/[,\n;]/).map((v) => v.trim()).filter(Boolean)
+      : [];
+
+    const row = (label: string, value: string) =>
+      value ? `<tr><td style="padding:4px 12px 4px 0;color:#6b6461;white-space:nowrap"><b>${label}</b></td><td style="padding:4px 0">${escapeEmailValue(value)}</td></tr>` : "";
+    const detailsTable = (extra = "") =>
+      `<table role="presentation" cellpadding="0" cellspacing="0" style="font-size:14px">${row("Reference", reference)}${row("Service", service)}${row("Center", center)}${extra}</table>`;
+
+    if (kind === "cancelled") {
+      const studentBody =
+        `<p style="margin:0 0 16px">Hello ${escapeEmailValue(booking.student_name || "")},</p>` +
+        `<p style="margin:0 0 16px">Your booking below has been <b>cancelled</b>.</p>` +
+        detailsTable(row("Date & time", when)) +
+        `<p style="margin:16px 0 0">If this was a mistake or you'd like to rebook, please contact us.</p>`;
+      const staffBody =
+        `<p style="margin:0 0 16px">A booking has been <b>cancelled</b>.</p>` +
+        detailsTable(row("Student", booking.student_name || "") + row("Date & time", when));
+
+      if (booking.student_email) {
+        await sendStaffNotification(env, {
+          to: [booking.student_email],
+          subject: `Booking cancelled: ${service} — ${when || reference}`,
+          html: renderBrandedEmail("Your booking is cancelled", studentBody),
+          text: htmlToText(studentBody)
+        });
+      }
+      if (notifyEmails.length) {
+        await sendStaffNotification(env, {
+          to: notifyEmails,
+          subject: `Booking cancelled: ${service} — ${when || reference}`,
+          html: renderBrandedEmail("Booking cancelled", staffBody),
+          text: htmlToText(staffBody)
+        });
+      }
+    } else {
+      const studentBody =
+        `<p style="margin:0 0 16px">Hello ${escapeEmailValue(booking.student_name || "")},</p>` +
+        `<p style="margin:0 0 16px">Your booking has been <b>rescheduled</b>.</p>` +
+        detailsTable(row("Previous time", previousWhen) + row("New time", when)) +
+        `<p style="margin:16px 0 0">We look forward to seeing you at the new time.</p>`;
+      const staffBody =
+        `<p style="margin:0 0 16px">A booking has been <b>rescheduled</b>.</p>` +
+        detailsTable(row("Student", booking.student_name || "") + row("Previous time", previousWhen) + row("New time", when));
+
+      if (booking.student_email) {
+        await sendStaffNotification(env, {
+          to: [booking.student_email],
+          subject: `Booking rescheduled: ${service} — ${when || reference}`,
+          html: renderBrandedEmail("Your booking is rescheduled", studentBody),
+          text: htmlToText(studentBody)
+        });
+      }
+      if (notifyEmails.length) {
+        await sendStaffNotification(env, {
+          to: notifyEmails,
+          subject: `Booking rescheduled: ${service} — ${when || reference}`,
+          html: renderBrandedEmail("Booking rescheduled", staffBody),
+          text: htmlToText(staffBody)
+        });
+      }
+    }
+  } catch (error) {
+    console.error("[email] lifecycle notification failed", error);
+  }
 }
 
 export function serviceResponse(service: {
