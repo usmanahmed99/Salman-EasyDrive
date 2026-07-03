@@ -3,7 +3,7 @@ import type { Env } from "./types";
 import { checkExactSlot } from "./availability";
 import type { EvaluatedSlot } from "../shared/availability";
 import { createCalendarEvent, deleteCalendarEvent, getCalendarEvent, shareCalendar } from "./google";
-import { sendStaffNotification } from "./email";
+import { sendStaffNotification, renderBrandedEmail, htmlToText, escapeHtml as escapeEmailValue } from "./email";
 import { addMinutes, HttpError, randomToken, sha256, uuid } from "./utils";
 
 interface TemplateFields {
@@ -652,23 +652,52 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     if (booking.notifications_sent_at) return; // already sent on an earlier attempt
     const emailErrors: string[] = [];
 
-    // Emails carry the SAME content as the calendar event (summary + description), so recipients
-    // get exactly what the invitation would have contained — reference, student, date/time, price,
-    // visible form fields, package schedule, and the manage link (all already composed above).
+    // Student confirmation: the admin-authored template (`description`) is customer-facing content
+    // (greeting, payment/e-Transfer instructions, manage link). It already contains HTML, so render
+    // it as-is inside the branded shell; the plain-text fallback is the tags stripped out.
     if (booking.student_email) {
+      const studentHtml = renderBrandedEmail("Your booking is confirmed", description);
       const studentResult = await sendStaffNotification(env, {
         to: [booking.student_email],
         subject: `Booking confirmed: ${summary}`,
-        text: `${description}\n`
+        html: studentHtml,
+        text: htmlToText(description)
       });
       if (!studentResult.ok) emailErrors.push(`student: ${studentResult.error}`);
     }
 
+    // Staff notification: an INTERNAL alert, not addressed to the student. It states that a booking
+    // was made and lists the details, rather than greeting/thanking the customer. Built from the
+    // booking fields so it never carries the customer-facing payment-request wording.
     if (notifyEmails.length) {
+      const detailRows = [
+        ["Reference", fields.reference],
+        ["Service", fields.service],
+        ["Center", fields.center],
+        ["Student", fields.student],
+        ["Date & time", fields.dateTime],
+        ["Duration", fields.duration],
+        ["Price", fields.price]
+      ]
+        .filter(([, value]) => value)
+        .map(([label, value]) => `<tr><td style="padding:4px 12px 4px 0;color:#6b6461;white-space:nowrap"><b>${label}</b></td><td style="padding:4px 0">${escapeEmailValue(value)}</td></tr>`)
+        .join("");
+      const extraFields = fields.visibleFields
+        ? `<p style="margin:16px 0 4px;font-weight:700">Appointment information</p><div style="white-space:pre-wrap">${escapeEmailValue(fields.visibleFields)}</div>`
+        : "";
+      const packageInfo = fields.packageSchedule
+        ? `<p style="margin:16px 0 4px;font-weight:700">Package schedule</p><div style="white-space:pre-wrap">${escapeEmailValue(fields.packageSchedule)}</div>`
+        : "";
+      const staffBodyHtml =
+        `<p style="margin:0 0 16px">A new booking has been made.</p>` +
+        `<table role="presentation" cellpadding="0" cellspacing="0" style="font-size:14px">${detailRows}</table>` +
+        extraFields + packageInfo +
+        (manageUrl ? `<p style="margin:16px 0 0"><a href="${escapeEmailValue(manageUrl)}" style="color:#EF4423">View booking</a></p>` : "");
       const notifyResult = await sendStaffNotification(env, {
         to: notifyEmails,
         subject: `New booking: ${summary}`,
-        text: `${description}\n`
+        html: renderBrandedEmail("New booking received", staffBodyHtml),
+        text: htmlToText(staffBodyHtml)
       });
       if (!notifyResult.ok) emailErrors.push(`staff: ${notifyResult.error}`);
     }
@@ -698,7 +727,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
       // Brevo. Staff also see the event via the reader ACL granted above.
       canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
         summary,
-        description,
+        // Google Calendar shows the description as plain text, so strip the admin template's HTML.
+        description: htmlToText(description),
         start: booking.start_at,
         end: booking.end_at,
         timezone: booking.timezone,
