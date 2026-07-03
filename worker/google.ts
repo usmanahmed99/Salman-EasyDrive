@@ -117,16 +117,6 @@ export async function createCalendarEvent(
     end: string;
     timezone: string;
     attendeeEmail?: string;
-    /**
-     * Staff notification inbox(es) — added as attendees so the booking appears on their calendar.
-     * Whether Google emails them is controlled by notifyStaffByEmail: on a booking's first sync they
-     * are normal invited attendees (emailed); on a retry/resync they are marked responseStatus
-     * 'accepted' so Google does not re-invite them. Re-inviting the same fixed staff address on every
-     * retry trips Google's per-recipient guard ("Calendar usage limits exceeded.").
-     */
-    notifyEmails?: string[];
-    /** True on first sync (email staff), false on retries (add staff without re-emailing). Default true. */
-    notifyStaffByEmail?: boolean;
     bookingId: string;
     reference: string;
   },
@@ -144,26 +134,15 @@ export async function createCalendarEvent(
         description: event.description,
         start: { dateTime: event.start, timeZone: event.timezone },
         end: { dateTime: event.end, timeZone: event.timezone },
-        // Attendees only matter when Google should email them (sendUpdates). The student is always a
-        // normal invited attendee (gets the invite email). Staff notification inboxes are invited
-        // normally on the first sync (notifyStaffByEmail), but on retries they are marked
-        // responseStatus 'accepted' so the event still shows on their calendar WITHOUT Google
-        // re-inviting them — re-inviting a fixed staff address on every retry trips Google's
-        // per-recipient invitation guard ("Calendar usage limits exceeded.").
+        // The student is the only invited attendee (gets the invite email when sendUpdates=all).
+        // Staff notification inboxes are NOT invited per-event — they are granted reader ACL on the
+        // calendar once (see syncBookingCalendar), so they see every booking at zero invitation cost.
+        // Re-inviting a fixed staff address on every booking trips Google's per-recipient invitation
+        // guard ("Calendar usage limits exceeded.").
         attendees: (() => {
           if (!sendUpdates) return undefined;
           const student = event.attendeeEmail?.trim().toLowerCase();
-          const staff = (event.notifyEmails || [])
-            .map((value) => value?.trim().toLowerCase())
-            .filter((value): value is string => Boolean(value) && value !== student);
-          const emailStaff = event.notifyStaffByEmail !== false;
-          const attendees: Array<{ email: string; responseStatus?: string }> = [];
-          if (student) attendees.push({ email: student });
-          for (const email of [...new Set(staff)]) {
-            // First sync: normal invitee (emailed). Retry: pre-accepted so Google won't re-invite.
-            attendees.push(emailStaff ? { email } : { email, responseStatus: "accepted" });
-          }
-          return attendees.length ? attendees : undefined;
+          return student ? [{ email: student }] : undefined;
         })(),
         extendedProperties: {
           private: {

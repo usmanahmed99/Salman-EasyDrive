@@ -2,7 +2,8 @@ import type { BookingForm } from "../shared/types";
 import type { Env } from "./types";
 import { checkExactSlot } from "./availability";
 import type { EvaluatedSlot } from "../shared/availability";
-import { createCalendarEvent, deleteCalendarEvent, getCalendarEvent } from "./google";
+import { createCalendarEvent, deleteCalendarEvent, getCalendarEvent, shareCalendar } from "./google";
+import { sendStaffNotification } from "./email";
 import { addMinutes, HttpError, randomToken, sha256, uuid } from "./utils";
 
 interface TemplateFields {
@@ -633,20 +634,25 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? renderTemplate(activeDescriptionTemplate, fields)
     : defaultDescription;
 
-  // Staff notification inbox(es) (optional): added as attendees so Google emails them on the
-  // booking's FIRST sync. Stored as a comma-separated list; google.ts merges them with the student.
+  // Staff notification inbox(es) (optional): stored as a comma-separated list. We do NOT invite
+  // them as per-event attendees — re-inviting the same fixed address on every booking trips
+  // Google's per-recipient invitation guard ("Calendar usage limits exceeded."). Instead each
+  // staff inbox is granted reader ACL on the canonical calendar once (below), so every event
+  // shows up on their calendar at zero per-booking invitation cost. Only the student is invited.
   const notifyEmails = template?.notification_email?.trim()
     ? template.notification_email.split(/[,\n;]/).map((value) => value.trim()).filter(Boolean)
-    : undefined;
-
-  // A retry/resync re-runs this for a booking that already failed at least once. Inviting the same
-  // people again on every retry trips Google's invitation guard ("Calendar usage limits exceeded.").
-  // Existing events are reused below; when a retry must create a missing event, staff are still added
-  // but pre-accepted so only the student receives the replacement invite.
-  const isRetry = booking.status === "calendar_sync_failed" || Number(booking.calendar_sync_attempts) > 0;
+    : [];
 
   let canonicalEventId = await findReusableCalendarEvent(env, bookingId, canonical.calendar_id, "canonical");
   if (!canonicalEventId) {
+    // Grant staff inboxes reader access to the canonical calendar before the event is created.
+    // shareCalendar is idempotent on Google's side (re-inserting the same ACL rule is a no-op that
+    // sends no email), so running it only on event creation keeps the cost negligible while
+    // ensuring newly-added notification addresses get access. Best-effort: a failed grant must not
+    // block the booking's own event.
+    for (const staffEmail of notifyEmails) {
+      await shareCalendar(env, canonical.calendar_id, staffEmail, "reader");
+    }
     canonicalEventId = await createCalendarEvent(env, canonical.calendar_id, {
       summary,
       description,
@@ -654,8 +660,6 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
       end: booking.end_at,
       timezone: booking.timezone,
       attendeeEmail: booking.student_email || undefined,
-      notifyEmails,
-      notifyStaffByEmail: !isRetry,
       bookingId,
       reference: booking.reference
     }, true);
@@ -663,6 +667,29 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
       INSERT INTO booking_calendar_events(id, booking_id, calendar_id, google_event_id, event_role, sync_status)
       VALUES (?, ?, ?, ?, 'canonical', 'synced')
     `).bind(uuid(), bookingId, canonical.calendar_id, canonicalEventId).run();
+
+    // Per-booking staff email ping. This block only runs when the canonical event is first
+    // created, so it fires once per booking (not on retries/resyncs, which reuse the event).
+    // Staff still see the booking via calendar reader ACL granted above; this adds an actual
+    // email into their Outlook inbox. Best-effort: a send failure never blocks the sync.
+    if (notifyEmails.length) {
+      const notifyBody = [
+        `New booking confirmed — ${fields.reference}`,
+        "",
+        `Service: ${fields.service}`,
+        `Center: ${fields.center}`,
+        `Student: ${fields.student}`,
+        fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
+        fields.duration ? `Duration: ${fields.duration}` : "",
+        fields.visibleFields,
+        manageUrl ? `\nManage: ${manageUrl}` : ""
+      ].filter(Boolean).join("\n");
+      await sendStaffNotification(env, {
+        to: notifyEmails,
+        subject: `New booking: ${fields.service} — ${fields.dateTime || fields.reference}`,
+        text: notifyBody
+      });
+    }
   }
 
   const allocatedResources = (await env.DB.prepare(`

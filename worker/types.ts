@@ -12,6 +12,11 @@ export interface Env {
   TURNSTILE_SITE_KEY?: string;
   DEFAULT_TIMEZONE?: string;
   ADMIN_EMAILS?: string;
+  // Brevo (Sendinblue) transactional-email API key. Optional: when unset, staff
+  // notification emails are silently skipped (staff still see bookings via calendar ACL).
+  BREVO_API_KEY?: string;
+  // From-address for staff notification emails. Falls back to a sensible default if unset.
+  NOTIFY_FROM_EMAIL?: string;
 }
 
 export interface SessionUser {

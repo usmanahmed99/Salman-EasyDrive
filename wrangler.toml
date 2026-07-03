@@ -31,6 +31,7 @@ PUBLIC_SITE_ORIGIN = "https://easydriving.nextiadriveops.com,https://easydriving
 GOOGLE_REDIRECT_URI = "https://easydriving.nextiadriveops.com/api/auth/google/callback"
 DEFAULT_TIMEZONE = "America/Montreal"
 ADMIN_EMAILS = "easydrivingca.dev@gmail.com"
+NOTIFY_FROM_EMAIL = "notifications@easydriving.ca"
 
 # ---- Production (client-owned account, book.easydriving.ca) ----
 # Deploy with: wrangler deploy --env production
@@ -67,3 +68,5 @@ PUBLIC_SITE_ORIGIN = "https://book.easydriving.ca,https://easydriving.ca,https:/
 GOOGLE_REDIRECT_URI = "https://book.easydriving.ca/api/auth/google/callback"
 DEFAULT_TIMEZONE = "America/Montreal"
 ADMIN_EMAILS = "easydrivingca@gmail.com,monsieur.usman.ahmed@gmail.com"
+NOTIFY_FROM_EMAIL = "notifications@easydriving.ca"
+
