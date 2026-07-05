@@ -762,6 +762,20 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         SELECT bookings.id, bookings.reference, bookings.start_at, bookings.created_at, bookings.status,
           bookings.calendar_last_error, bookings.package_booking_id,
           package_bookings.reference AS package_reference, packages.name_en AS package_name,
+          -- Position of this session within its package, and the package's active-session count,
+          -- both ordered/counted over the same active statuses the calendar invite uses, so the
+          -- admin "Pkg 3/6" badge matches the "Lesson 3 of 6" line in the student's invite.
+          (
+            SELECT COUNT(*) FROM bookings sib
+            WHERE sib.package_booking_id = bookings.package_booking_id
+              AND sib.status IN ('confirmed', 'pending_confirmation', 'calendar_sync_failed')
+              AND (sib.start_at < bookings.start_at OR (sib.start_at = bookings.start_at AND sib.id <= bookings.id))
+          ) AS package_position,
+          (
+            SELECT COUNT(*) FROM bookings sib
+            WHERE sib.package_booking_id = bookings.package_booking_id
+              AND sib.status IN ('confirmed', 'pending_confirmation', 'calendar_sync_failed')
+          ) AS package_total,
           services.name_en AS service, services.slug AS service_slug,
           centers.name AS center, centers.slug AS center_slug,
           COALESCE(booking_form_responses.student_name, 'Private') AS student,
@@ -795,6 +809,10 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         package_booking_id: booking.package_booking_id || "",
         package_reference: booking.package_reference || "",
         package_name: booking.package_name || "",
+        // "Pkg 3/6" badge inputs. Only meaningful for an active session in a package; a cancelled
+        // session isn't counted among the active siblings (position 0) so we blank it there.
+        package_position: Number(booking.package_position) || 0,
+        package_total: Number(booking.package_total) || 0,
       })) });
     }
     if (path === "/api/admin/overrides" && method === "GET") {

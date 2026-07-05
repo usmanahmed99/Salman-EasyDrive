@@ -84,6 +84,8 @@ interface AdminBooking {
   packageBookingId?: string;
   packageReference?: string;
   packageName?: string;
+  packagePosition?: number;
+  packageTotal?: number;
 }
 
 const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
@@ -1045,6 +1047,9 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
                   {booking.packageName && (
                     <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-700" title={`Part of package ${booking.packageReference}`}>
                       <PackageIcon size={11} /> {booking.packageName}
+                      {booking.packagePosition && booking.packageTotal && (
+                        <span className="rounded-full bg-brand-100 px-1.5 text-brand-800">{booking.packagePosition}/{booking.packageTotal}</span>
+                      )}
                     </span>
                   )}
                 </td>
@@ -1101,6 +1106,9 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
                   {booking.packageName && (
                     <span className="ml-1.5 inline-flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-bold text-brand-700">
                       <PackageIcon size={11} /> {booking.packageName}
+                      {booking.packagePosition && booking.packageTotal && (
+                        <span className="rounded-full bg-brand-100 px-1.5 text-brand-800">{booking.packagePosition}/{booking.packageTotal}</span>
+                      )}
                     </span>
                   )}
                 </dd>
@@ -3448,7 +3456,9 @@ export default function AdminPortal() {
     calendarLastError: booking.calendar_last_error || undefined,
     packageBookingId: booking.package_booking_id || undefined,
     packageReference: booking.package_reference || undefined,
-    packageName: booking.package_name || undefined
+    packageName: booking.package_name || undefined,
+    packagePosition: booking.package_position || undefined,
+    packageTotal: booking.package_total || undefined
   } as AdminBooking));
 
   const loadAll = useCallback(async (opts?: { requirements?: boolean }) => {

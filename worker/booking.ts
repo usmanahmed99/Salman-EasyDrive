@@ -19,6 +19,8 @@ interface TemplateFields {
   visibleFields: string;
   /** For package sessions: the full list of sessions in the package; empty for standalone bookings. */
   packageSchedule: string;
+  /** For package sessions: "Lesson 3 of 6" for this session's position; empty for standalone bookings. */
+  packageProgress: string;
 }
 
 // Booking start instant → "Mon, Jun 29, 2026, 1:00 p.m." in the center's timezone.
@@ -580,22 +582,30 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     ? `${booking.duration_minutes} min`
     : "";
 
-  // For a package session, list every session in the package so each invite shows the full plan.
+  // For a package session, list every session in the package so each invite shows the full plan,
+  // and state this session's position ("Lesson 3 of 6") so it's clear at a glance which lesson it is.
   let packageSchedule = "";
+  let packageProgress = "";
   if (booking.package_booking_id) {
     const siblings = (await env.DB.prepare(`
-      SELECT bookings.start_at, services.name_en, services.name_fr
+      SELECT bookings.id, bookings.start_at, services.name_en, services.name_fr
       FROM bookings JOIN services ON services.id = bookings.service_id
       WHERE bookings.package_booking_id = ?
         AND bookings.status IN ('confirmed', 'pending_confirmation', 'calendar_sync_failed')
       ORDER BY bookings.start_at
-    `).bind(booking.package_booking_id).all<{ start_at: string; name_en: string; name_fr: string }>()).results;
+    `).bind(booking.package_booking_id).all<{ id: string; start_at: string; name_en: string; name_fr: string }>()).results;
     if (siblings.length) {
       const header = isFr ? "Calendrier du forfait :" : "Package schedule:";
       packageSchedule = [header, ...siblings.map((sibling, index) => {
         const serviceName = isFr ? (sibling.name_fr || sibling.name_en) : sibling.name_en;
         return `${index + 1}. ${serviceName} — ${formatBookingDateTime(sibling.start_at, booking.timezone, isFr)}`;
       })].join("\n");
+      const position = siblings.findIndex((sibling) => sibling.id === booking.id) + 1;
+      if (position > 0) {
+        packageProgress = isFr
+          ? `Leçon ${position} sur ${siblings.length}`
+          : `Lesson ${position} of ${siblings.length}`;
+      }
     }
   }
 
@@ -610,7 +620,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     dateTime: formatBookingDateTime(booking.start_at, booking.timezone, isFr),
     manageUrl,
     visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n"),
-    packageSchedule
+    packageSchedule,
+    packageProgress
   };
 
   // Defaults are intentionally good on their own; templates only override when set.
@@ -622,6 +633,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
     fields.duration ? `Duration: ${fields.duration}` : "",
     fields.price ? `Price: ${fields.price}` : "",
+    fields.packageProgress ? `Package: ${fields.packageProgress}` : "",
     `Center: ${fields.center}`,
     fields.visibleFields,
     fields.packageSchedule ? `\n${fields.packageSchedule}` : "",
