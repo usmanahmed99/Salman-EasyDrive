@@ -127,13 +127,14 @@ function AdminLogo() {
 function StatusBadge({ status }: { status: string }) {
   const failed = status === "calendar_sync_failed";
   const cancelled = status.startsWith("cancelled");
+  const done = status === "completed";
   return (
     <span className={clsx(
       "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-bold capitalize",
-      failed ? "bg-amber-50 text-amber-700" : cancelled ? "bg-slate-100 text-slate-600" : "bg-emerald-50 text-emerald-700"
+      failed ? "bg-amber-50 text-amber-700" : cancelled ? "bg-slate-100 text-slate-600" : done ? "bg-sky-50 text-sky-700" : "bg-emerald-50 text-emerald-700"
     )}>
-      <span className={clsx("h-1.5 w-1.5 rounded-full", failed ? "bg-amber-500" : cancelled ? "bg-slate-400" : "bg-emerald-500")} />
-      {failed ? "Sync issue" : cancelled ? "Cancelled" : status.replace(/_/g, " ")}
+      <span className={clsx("h-1.5 w-1.5 rounded-full", failed ? "bg-amber-500" : cancelled ? "bg-slate-400" : done ? "bg-sky-500" : "bg-emerald-500")} />
+      {failed ? "Sync issue" : cancelled ? "Cancelled" : done ? "Completed" : status.replace(/_/g, " ")}
     </span>
   );
 }
@@ -939,6 +940,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
 
   const centerNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.center))).sort(), [bookings]);
   const serviceNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.service))).sort(), [bookings]);
+  const packageNames = useMemo(() => Array.from(new Set(bookings.map((b) => b.packageName).filter((name): name is string => Boolean(name)))).sort(), [bookings]);
   const statuses = useMemo(() => Array.from(new Set(bookings.map((b) => b.status))).sort(), [bookings]);
   // A booking may list multiple instructors ("A, B"); split so each is its own filter option.
   const instructorNames = useMemo(
@@ -947,10 +949,14 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
   );
 
   const filtered = useMemo(() => bookings.filter((booking) => {
-    if (query && !`${booking.student} ${booking.reference} ${booking.service} ${booking.center} ${booking.instructor || ""}`.toLowerCase().includes(query.toLowerCase())) return false;
+    if (query && !`${booking.student} ${booking.reference} ${booking.service} ${booking.packageName || ""} ${booking.packageReference || ""} ${booking.center} ${booking.instructor || ""}`.toLowerCase().includes(query.toLowerCase())) return false;
     if (statusFilter !== "all" && booking.status !== statusFilter) return false;
     if (centerFilter !== "all" && booking.center !== centerFilter) return false;
-    if (serviceFilter !== "all" && booking.service !== serviceFilter) return false;
+    if (serviceFilter !== "all") {
+      if (serviceFilter.startsWith("pkg:")) {
+        if (booking.packageName !== serviceFilter.slice(4)) return false;
+      } else if (booking.service !== serviceFilter) return false;
+    }
     if (instructorFilter !== "all" && !(booking.instructor || "").split(", ").includes(instructorFilter)) return false;
     if (dateFrom && booking.start_at < dateFrom) return false;
     if (dateTo && booking.start_at > dateTo + "T23:59:59") return false;
@@ -972,7 +978,7 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
           <div className="relative w-full lg:max-w-md">
             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name, reference or instructor" value={query} onChange={(e) => setQuery(e.target.value)} />
+            <input className="field py-2.5 !pl-11 pr-4" placeholder="Search name, reference, package or instructor" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-2 lg:ml-auto lg:flex lg:shrink-0 lg:items-center">
             <button className="secondary-button min-h-11 px-3 py-2 text-xs" title="Check Google Calendar for externally-deleted events and free those slots" disabled={reconciling} onClick={reconcile}>
@@ -995,6 +1001,11 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
           <select className="field col-span-1 py-2.5 pl-3 pr-8 text-sm xl:!w-44" value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
             <option value="all">All services</option>
             {serviceNames.map((s) => <option key={s} value={s}>{s}</option>)}
+            {packageNames.length > 0 && (
+              <optgroup label="Packages">
+                {packageNames.map((p) => <option key={`pkg:${p}`} value={`pkg:${p}`}>{p}</option>)}
+              </optgroup>
+            )}
           </select>
           <select className="field col-span-1 py-2.5 pl-3 pr-8 text-sm xl:!w-44" value={instructorFilter} onChange={(e) => setInstructorFilter(e.target.value)}>
             <option value="all">All instructors</option>

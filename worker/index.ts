@@ -1259,6 +1259,13 @@ export default {
     // Retry bookings whose calendar sync failed transiently (e.g. Google invitation quota),
     // so a rate-limit blip self-heals within a day instead of needing a manual admin Retry.
     ctx.waitUntil(retryFailedSyncs(env).catch((error) => console.error("[reconcile] retry failed", error)));
+    // Once a booking's end time has passed it's no longer "confirmed" but "completed".
+    // end_at is stored as an ISO string with a trailing Z; datetime() normalises both sides to UTC.
+    ctx.waitUntil(
+      env.DB.prepare(
+        "UPDATE bookings SET status='completed', updated_at=CURRENT_TIMESTAMP WHERE status='confirmed' AND datetime(end_at) < datetime('now')"
+      ).run().catch((error) => console.error("[complete] failed", error))
+    );
     // Retention is a once-a-day job: only run it on the early-morning tick.
     const now = new Date();
     if (now.getUTCHours() === 5 && now.getUTCMinutes() < 30) {
