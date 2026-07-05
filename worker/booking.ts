@@ -17,6 +17,8 @@ interface TemplateFields {
   dateTime: string;
   manageUrl: string;
   visibleFields: string;
+  /** For package sessions: the package's name; empty for standalone bookings. */
+  packageName: string;
   /** For package sessions: the full list of sessions in the package; empty for standalone bookings. */
   packageSchedule: string;
   /** For package sessions: "Lesson 3 of 6" for this session's position; empty for standalone bookings. */
@@ -532,11 +534,14 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
       services.description_en, services.description_fr, services.price_display,
       services.price_tax_mode, services.show_duration, services.duration_minutes,
       booking_form_responses.response_json, booking_form_responses.student_name,
-      booking_form_responses.student_email
+      booking_form_responses.student_email,
+      packages.name_en AS package_name_en, packages.name_fr AS package_name_fr
     FROM bookings
     JOIN centers ON centers.id = bookings.center_id
     JOIN services ON services.id = bookings.service_id
     LEFT JOIN booking_form_responses ON booking_form_responses.booking_id = bookings.id
+    LEFT JOIN package_bookings ON package_bookings.id = bookings.package_booking_id
+    LEFT JOIN packages ON packages.id = package_bookings.package_id
     WHERE bookings.id = ?
   `).bind(bookingId).first<Record<string, string>>();
   if (!booking) throw new HttpError(404, "Booking not found.");
@@ -586,6 +591,9 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   // and state this session's position ("Lesson 3 of 6") so it's clear at a glance which lesson it is.
   let packageSchedule = "";
   let packageProgress = "";
+  const packageName = booking.package_booking_id
+    ? (isFr ? (booking.package_name_fr || booking.package_name_en || "") : (booking.package_name_en || ""))
+    : "";
   if (booking.package_booking_id) {
     const siblings = (await env.DB.prepare(`
       SELECT bookings.id, bookings.start_at, services.name_en, services.name_fr
@@ -620,6 +628,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     dateTime: formatBookingDateTime(booking.start_at, booking.timezone, isFr),
     manageUrl,
     visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n"),
+    packageName,
     packageSchedule,
     packageProgress
   };
@@ -633,7 +642,9 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
     fields.duration ? `Duration: ${fields.duration}` : "",
     fields.price ? `Price: ${fields.price}` : "",
-    fields.packageProgress ? `Package: ${fields.packageProgress}` : "",
+    fields.packageName || fields.packageProgress
+      ? `Package: ${[fields.packageName, fields.packageProgress].filter(Boolean).join(" — ")}`
+      : "",
     `Center: ${fields.center}`,
     fields.visibleFields,
     fields.packageSchedule ? `\n${fields.packageSchedule}` : "",
@@ -694,7 +705,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
         ["Student", fields.student],
         ["Date & time", fields.dateTime],
         ["Duration", fields.duration],
-        ["Price", fields.price]
+        ["Price", fields.price],
+        ["Package", [fields.packageName, fields.packageProgress].filter(Boolean).join(" — ")]
       ]
         .filter(([, value]) => value)
         .map(([label, value]) => `<tr><td style="padding:4px 12px 4px 0;color:#6b6461;white-space:nowrap"><b>${label}</b></td><td style="padding:4px 0">${escapeEmailValue(value)}</td></tr>`)
