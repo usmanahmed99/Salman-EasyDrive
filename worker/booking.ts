@@ -216,13 +216,19 @@ export async function prepareSession(
   const studentEmail = String(payload.answers.email || "");
   const studentPhone = String(payload.answers.phone || "");
 
+  // Revenue snapshot: a standalone booking captures its service's numeric price. A package session
+  // leaves this NULL here — the full package amount is attributed to a single session (the earliest)
+  // by confirmPackageBooking after all sessions are reserved, so package revenue isn't double-counted.
+  const priceCents = options.packageBookingId ? null : context.service.price_cents ?? null;
+
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(`
       INSERT INTO bookings(
         id, reference, center_id, service_id, start_at, end_at, operational_start_at,
         operational_end_at, timezone, language, status, form_version,
-        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, package_booking_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, package_booking_id,
+        price_cents
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `).bind(
       id,
       reference,
@@ -239,7 +245,8 @@ export async function prepareSession(
       JSON.stringify(form),
       tokenHash,
       publicToken,
-      options.packageBookingId ?? null
+      options.packageBookingId ?? null,
+      priceCents
     ),
     env.DB.prepare(`
       INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
@@ -374,12 +381,12 @@ export async function confirmAdminBooking(env: Env, payload: AdminBookingPayload
       INSERT INTO bookings(
         id, reference, center_id, service_id, start_at, end_at, operational_start_at,
         operational_end_at, timezone, language, status, form_version,
-        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending')
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, price_cents
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending', ?)
     `).bind(
       id, reference, context.center.id, context.service.id, payload.start, end,
       operationalStart, operationalEnd, context.center.timezone, payload.language,
-      form.version, JSON.stringify(form), tokenHash, publicToken
+      form.version, JSON.stringify(form), tokenHash, publicToken, context.service.price_cents ?? null
     ),
     env.DB.prepare(`
       INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
@@ -1016,6 +1023,7 @@ export function serviceResponse(service: {
   highlight_fr?: string;
   sort_order?: number;
   price_tax_mode?: string;
+  price_cents?: number | null;
 }) {
   return {
     id: service.id,
@@ -1028,6 +1036,7 @@ export function serviceResponse(service: {
     slotIntervalMinutes: service.slot_interval_minutes ?? 30,
     priceDisplay: service.price_display || undefined,
     priceTaxMode: (service.price_tax_mode === "incl" || service.price_tax_mode === "plus") ? service.price_tax_mode : "none",
+    priceCents: service.price_cents ?? undefined,
     enabled: Boolean(service.enabled),
     requestOnly: Boolean(service.request_only),
     formId: service.form_id,

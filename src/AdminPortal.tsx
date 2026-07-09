@@ -11,6 +11,7 @@ import {
   ChevronRight,
   CircleGauge,
   Clock3,
+  Download,
   FileText,
   FormInput,
   Gauge,
@@ -23,8 +24,10 @@ import {
   LoaderCircle,
   LogIn,
   LogOut,
+  Mail,
   MapPin,
   Menu,
+  Phone,
   Package as PackageIcon,
   Plus,
   RefreshCw,
@@ -33,12 +36,17 @@ import {
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  TrendingUp,
   Unlink,
   UserRound,
   UsersRound,
   X
 } from "lucide-react";
 import clsx from "clsx";
+import {
+  Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Legend,
+  ResponsiveContainer, Tooltip as ReTooltip, XAxis, YAxis
+} from "recharts";
 import { adminApi, type AdminUser } from "./api";
 import AdminDocs from "./AdminDocs";
 import type {
@@ -49,6 +57,8 @@ import type {
   FormField,
   Package,
   ResourceGroup,
+  RevenueBucket,
+  RevenueReport,
   Service
 } from "../shared/types";
 import { fieldNeedsOptions, validateBookingForm } from "../shared/types";
@@ -56,6 +66,7 @@ import { fieldNeedsOptions, validateBookingForm } from "../shared/types";
 type AdminSection =
   | "dashboard"
   | "bookings"
+  | "revenue"
   | "centers"
   | "services"
   | "packages"
@@ -74,6 +85,8 @@ interface AdminBooking {
   start_at: string;
   booked_at: string;
   student: string;
+  phone?: string;
+  email?: string;
   service: string;
   serviceSlug?: string;
   center: string;
@@ -88,9 +101,10 @@ interface AdminBooking {
   packageTotal?: number;
 }
 
-const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard }> = [
+const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard; roles?: AdminUser["role"][] }> = [
   { id: "dashboard", label: "Today", icon: LayoutDashboard },
   { id: "bookings", label: "Bookings", icon: CalendarDays },
+  { id: "revenue", label: "Revenue", icon: TrendingUp, roles: ["owner", "admin"] },
   { id: "centers", label: "Centers", icon: MapPin },
   { id: "services", label: "Services", icon: Gauge },
   { id: "packages", label: "Packages", icon: PackageIcon },
@@ -162,11 +176,12 @@ function Modal({ title, onClose, children, footer }: { title: string; onClose: (
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
     <label className="block">
       <span className="label">{label}</span>
       {children}
+      {hint && <span className="mt-1 block text-xs text-slate-400">{hint}</span>}
     </label>
   );
 }
@@ -191,6 +206,51 @@ function ReadonlySlug({ label, value }: { label: string; value: string }) {
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Format a raw phone string as +1 (514) 463-1043 for display. Non-North-American or
+ * unexpected shapes fall back to the raw value so nothing is lost. The digits copied to the
+ * clipboard are always the raw value, so a tel: paste keeps whatever the student entered.
+ */
+function formatPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  const local = digits.length === 11 && digits.startsWith("1") ? digits.slice(1) : digits;
+  if (local.length === 10) return `+1 (${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}`;
+  return raw;
+}
+
+/**
+ * A one-click copyable contact value (phone/email). Reuses the copy idiom from ReadonlySlug:
+ * click copies the raw value and briefly flips the icon to a check. Renders "—" when empty
+ * (phone/email are nulled after retention anonymization).
+ */
+function CopyChip({ value, kind }: { value?: string; kind: "phone" | "email" }) {
+  const [copied, setCopied] = useState(false);
+  if (!value) return <span className="text-slate-300">—</span>;
+  const Icon = kind === "phone" ? Phone : Mail;
+  const display = kind === "phone" ? formatPhone(value) : value;
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch { /* clipboard unavailable */ }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`Copy ${kind} — ${value}`}
+      className="group inline-flex max-w-full items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+    >
+      <Icon size={12} className="shrink-0 text-slate-400 group-hover:text-brand-500" />
+      <span className="truncate font-medium">{display}</span>
+      {copied
+        ? <Check size={12} className="shrink-0 text-emerald-600" />
+        : <Copy size={12} className="shrink-0 text-slate-300 group-hover:text-brand-500" />}
+    </button>
   );
 }
 
@@ -556,6 +616,12 @@ function TodayDashboard({
                     {booking.service} · {booking.center}
                     {booking.instructor && <span className="text-slate-400"> · {booking.instructor}</span>}
                   </p>
+                  {(booking.phone || booking.email) && (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      <CopyChip value={booking.phone} kind="phone" />
+                      <CopyChip value={booking.email} kind="email" />
+                    </div>
+                  )}
                 </div>
                 <div className="ml-16 sm:ml-0"><StatusBadge status={booking.status} /></div>
               </div>
@@ -1030,11 +1096,11 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
         <table className="w-full min-w-[960px] text-left">
           <thead className="bg-slate-50 text-[11px] font-bold uppercase tracking-wider text-slate-400">
             <tr>
-              {["Date & Time", "Student", "Service", "Instructor", "Center", "Reference", "Booked on", "Status", ""].map((heading, index) => <th className="px-5 py-3" key={index}>{heading}</th>)}
+              {["Date & Time", "Student", "Contact", "Service", "Instructor", "Center", "Reference", "Booked on", "Status", ""].map((heading, index) => <th className="px-5 py-3" key={index}>{heading}</th>)}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
-            {filtered.length === 0 && <tr><td colSpan={9} className="px-5 py-10 text-center text-slate-400">No bookings found.</td></tr>}
+            {filtered.length === 0 && <tr><td colSpan={10} className="px-5 py-10 text-center text-slate-400">No bookings found.</td></tr>}
             {filtered.map((booking) => (
               <tr className="hover:bg-slate-50" key={booking.id}>
                 <td className="px-5 py-4">
@@ -1042,6 +1108,12 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
                   <span className="ml-1.5 text-xs text-slate-400">{booking.date}</span>
                 </td>
                 <td className="px-5 py-4 font-semibold text-ink">{booking.student}</td>
+                <td className="px-5 py-4">
+                  <div className="flex flex-col items-start gap-1">
+                    <CopyChip value={booking.phone} kind="phone" />
+                    <CopyChip value={booking.email} kind="email" />
+                  </div>
+                </td>
                 <td className="px-5 py-4 text-slate-600">
                   {booking.service}
                   {booking.packageName && (
@@ -1124,6 +1196,13 @@ function BookingsScreen({ bookings, centers, services, onResync, onCancel, onRec
               <div className="min-w-0">
                 <dt className="font-bold uppercase tracking-wider text-slate-400">Reference</dt>
                 <dd className="mt-1 truncate font-mono text-sm text-slate-600">{booking.reference}</dd>
+              </div>
+              <div className="col-span-2 min-w-0">
+                <dt className="font-bold uppercase tracking-wider text-slate-400">Contact</dt>
+                <dd className="mt-1 flex flex-wrap gap-1.5">
+                  <CopyChip value={booking.phone} kind="phone" />
+                  <CopyChip value={booking.email} kind="email" />
+                </dd>
               </div>
             </dl>
             {booking.calendarLastError === "event_deleted_externally" && (
@@ -1393,6 +1472,8 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
     slotIntervalMinutes: service?.slotIntervalMinutes ?? 30,
     priceDisplay: service?.priceDisplay || "",
     priceTaxMode: service?.priceTaxMode || "none",
+    // Numeric price in dollars for revenue analytics. Sent as dollars; the worker converts to cents.
+    priceCents: service?.priceCents != null ? String(service.priceCents / 100) : "",
     formId: service?.formId || forms[0]?.id || "form_lesson",
     cutoffHours: service?.cutoffHours ?? 2,
     cancellationCutoffHours: service?.cancellationCutoffHours ?? 12,
@@ -1468,6 +1549,9 @@ function ServiceModal({ service, initialRequirements, initialCenterIds, centers,
             <option value="incl">Tax included</option>
             <option value="plus">Plus tax</option>
           </select>
+        </Field>
+        <Field label="Price for revenue (CAD $)" hint="Numeric amount used in revenue analytics. Leave blank if not tracked.">
+          <input className="field" type="number" min="0" step="0.01" value={v.priceCents} onChange={(event) => set("priceCents", event.target.value)} placeholder="80" />
         </Field>
         <Field label="Duration (minutes)"><input className="field" type="number" value={v.durationMinutes} onChange={(event) => set("durationMinutes", Number(event.target.value))} /></Field>
         <Field label="Booking form">
@@ -1857,6 +1941,9 @@ function PackageModal({ pkg, services, centers, initialCenterIds, onClose, onSav
     descriptionFr: pkg?.description.fr || "",
     priceDisplay: pkg?.priceDisplay || "",
     priceTaxMode: pkg?.priceTaxMode || "none",
+    // Numeric bundle price in dollars for revenue analytics (worker converts to cents). The full
+    // amount is attributed to the package's earliest session at booking time.
+    priceCents: pkg?.priceCents != null ? String(pkg.priceCents / 100) : "",
     enabled: pkg?.enabled ?? true
   });
   // Each item carries an optional prerequisite: the id of another service in this package that must
@@ -1950,6 +2037,9 @@ function PackageModal({ pkg, services, centers, initialCenterIds, onClose, onSav
             <option value="incl">Tax included</option>
             <option value="plus">Plus tax</option>
           </select>
+        </Field>
+        <Field label="Price for revenue (CAD $)" hint="Numeric bundle price used in revenue analytics. Leave blank if not tracked.">
+          <input className="field" type="number" min="0" step="0.01" value={v.priceCents} onChange={(event) => set("priceCents", event.target.value)} placeholder="350" />
         </Field>
         <div className="sm:col-span-2">
           <span className="label mb-2 block">Sessions in this package</span>
@@ -3411,6 +3501,323 @@ function SignIn({ devLoginAvailable, onDevLogin }: { devLoginAvailable: boolean;
 }
 
 /* -------------------------------------------------------------------------- */
+/* Revenue analytics                                                          */
+/* -------------------------------------------------------------------------- */
+
+/** Shown when a non-owner/admin user reaches a role-gated section via a stale URL. */
+function PlaceholderDenied() {
+  return (
+    <div className="card grid place-items-center p-12 text-center">
+      <ShieldAlert className="text-slate-300" size={40} />
+      <p className="mt-4 text-lg font-extrabold text-ink">Not available for your role</p>
+      <p className="mt-1 text-sm text-slate-500">Revenue analytics is limited to owners and admins.</p>
+    </div>
+  );
+}
+
+const CAD = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
+const CAD_PRECISE = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", minimumFractionDigits: 2 });
+const centsToDollars = (cents: number) => cents / 100;
+const fmtMoney = (cents: number) => CAD.format(centsToDollars(cents));
+
+// Expected vs realized colours. Indigo (brand) for the full expected pipeline, emerald for realized
+// revenue — a high-contrast, colour-blind-safe pairing that also reads in the KPI cards.
+const COLOR_EXPECTED = "#4f46e5";
+const COLOR_REALIZED = "#059669";
+// Categorical palette for breakdown bars (distinct hues, consistent saturation/lightness).
+const CATEGORY_COLORS = ["#4f46e5", "#0891b2", "#059669", "#d97706", "#db2777", "#7c3aed", "#0d9488", "#c026d3"];
+
+type RangePreset = "7d" | "30d" | "90d" | "ytd" | "12m" | "custom";
+
+/** Compute [from, to] (YYYY-MM-DD, Montreal-local) for a preset relative to today. */
+function presetRange(preset: Exclude<RangePreset, "custom">): { from: string; to: string } {
+  const to = montrealToday();
+  if (preset === "ytd") return { from: to.slice(0, 4) + "-01-01", to };
+  const days = preset === "7d" ? 6 : preset === "30d" ? 29 : preset === "90d" ? 89 : 364;
+  return { from: addDays(to, -days), to };
+}
+
+/** The immediately-preceding window of equal length (for period-over-period comparison). */
+function previousRange(from: string, to: string): { from: string; to: string } {
+  const start = new Date(from + "T12:00:00Z").getTime();
+  const end = new Date(to + "T12:00:00Z").getTime();
+  const lenDays = Math.round((end - start) / 86400000) + 1;
+  return { from: addDays(from, -lenDays), to: addDays(to, -lenDays) };
+}
+
+/** Same window shifted back one year (year-over-year comparison). */
+function yearAgoRange(from: string, to: string): { from: string; to: string } {
+  const shift = (d: string) => { const [y, m, day] = d.split("-"); return `${Number(y) - 1}-${m}-${day}`; };
+  return { from: shift(from), to: shift(to) };
+}
+
+/** Quote a CSV cell (wrap in quotes and escape embedded quotes) so commas/quotes don't break columns. */
+function csvCell(value: string | number): string {
+  const s = String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * Flatten a RevenueReport into a single CSV covering the time series and every breakdown, with
+ * expected/realized shown in dollars (2dp) plus counts. One "section" column distinguishes the
+ * time series from each breakdown dimension. Triggers a client-side download.
+ */
+function downloadRevenueCsv(report: RevenueReport) {
+  const header = ["section", "key", "expected_cad", "realized_cad", "expected_count", "realized_count"];
+  const money = (cents: number) => (cents / 100).toFixed(2);
+  const rowsFor = (section: string, buckets: RevenueBucket[]) =>
+    buckets.map((b) => [section, b.key, money(b.expected), money(b.realized), b.expectedCount, b.realizedCount]);
+
+  const lines: (string | number)[][] = [
+    header,
+    ["totals", `${report.from}..${report.to}`, money(report.totals.expected), money(report.totals.realized), report.totals.expectedCount, report.totals.realizedCount],
+    ...rowsFor(`series_by_${report.granularity}`, report.series),
+    ...rowsFor("by_service", report.byService),
+    ...rowsFor("by_package", report.byPackage),
+    ...rowsFor("by_center", report.byCenter),
+    ...rowsFor("by_instructor", report.byInstructor),
+    ...rowsFor("by_weekday", report.byWeekday)
+  ];
+  const csv = lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  // Prepend a UTF-8 BOM so Excel opens accented names correctly.
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `revenue_${report.from}_to_${report.to}_by_${report.granularity}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function KpiCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent: string }) {
+  return (
+    <div className="card p-5">
+      <div className="flex items-center gap-2">
+        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: accent }} />
+        <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{label}</p>
+      </div>
+      <p className="mt-2 text-2xl font-extrabold text-ink sm:text-3xl">{value}</p>
+      {sub && <p className="mt-1 text-xs text-slate-500">{sub}</p>}
+    </div>
+  );
+}
+
+/** Weekdays in display order, so the day-of-week chart reads Mon→Sun regardless of data order. */
+const WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+function BreakdownChart({ title, data, empty }: { title: string; data: RevenueBucket[]; empty: string }) {
+  if (!data.length) return (
+    <div className="card p-5">
+      <h3 className="font-extrabold text-ink">{title}</h3>
+      <p className="mt-6 text-center text-sm text-slate-400">{empty}</p>
+    </div>
+  );
+  const rows = data.map((d) => ({ ...d, expectedDollars: centsToDollars(d.expected), realizedDollars: centsToDollars(d.realized) }));
+  return (
+    <div className="card p-5">
+      <h3 className="font-extrabold text-ink">{title}</h3>
+      <div className="mt-4 h-[280px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 16 }}>
+            <CartesianGrid horizontal={false} stroke="#e2e8f0" />
+            <XAxis type="number" tickFormatter={(v) => CAD.format(v)} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+            <YAxis type="category" dataKey="key" width={120} tick={{ fontSize: 11, fill: "#475569" }} />
+            <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} cursor={{ fill: "#f1f5f9" }} />
+            <Bar dataKey="expectedDollars" name="Expected" radius={[0, 4, 4, 0]}>
+              {rows.map((_, i) => <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />)}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
+  const [preset, setPreset] = useState<RangePreset>("30d");
+  const initial = presetRange("30d");
+  const [from, setFrom] = useState(initial.from);
+  const [to, setTo] = useState(initial.to);
+  const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
+  const [compare, setCompare] = useState<"none" | "previous" | "yoy">("none");
+
+  const [report, setReport] = useState<RevenueReport | null>(null);
+  const [compareReport, setCompareReport] = useState<RevenueReport | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const applyPreset = (next: Exclude<RangePreset, "custom">) => {
+    const range = presetRange(next);
+    setPreset(next);
+    setFrom(range.from);
+    setTo(range.to);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const primary = adminApi.revenue({ from, to, granularity });
+    const comparison = compare === "none"
+      ? Promise.resolve(null)
+      : adminApi.revenue({ ...(compare === "previous" ? previousRange(from, to) : yearAgoRange(from, to)), granularity });
+    Promise.all([primary, comparison])
+      .then(([main, cmp]) => {
+        if (cancelled) return;
+        setReport(main);
+        setCompareReport(cmp);
+      })
+      .catch((err) => { if (!cancelled) toast.show("error", errorMessage(err)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to, granularity, compare, toast]);
+
+  // Merge primary + comparison series positionally (period N of each window) so the overlay lines up
+  // even though the calendar labels differ. The x-axis shows the primary window's period labels.
+  const trendData = useMemo(() => {
+    if (!report) return [];
+    return report.series.map((point, i) => ({
+      key: point.key,
+      expected: centsToDollars(point.expected),
+      realized: centsToDollars(point.realized),
+      compare: compareReport?.series[i] ? centsToDollars(compareReport.series[i].expected) : undefined
+    }));
+  }, [report, compareReport]);
+
+  const weekdayData = useMemo(() => {
+    if (!report) return [];
+    const map = new Map(report.byWeekday.map((b) => [b.key, b]));
+    return WEEKDAY_ORDER
+      .filter((day) => map.has(day))
+      .map((day) => ({ key: day.slice(0, 3), expected: centsToDollars(map.get(day)!.expected) }));
+  }, [report]);
+
+  const totals = report?.totals;
+
+  return (
+    <div className="space-y-6">
+      {/* Controls */}
+      <div className="card p-4 sm:p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="flex flex-wrap gap-2">
+            {([["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["ytd", "Year to date"], ["12m", "12 months"]] as const).map(([id, label]) => (
+              <button key={id} onClick={() => applyPreset(id)}
+                className={clsx("rounded-lg px-3 py-1.5 text-xs font-bold", preset === id ? "bg-brand-600 text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50")}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <Field label="From"><input className="field" type="date" value={from} max={to} onChange={(e) => { setFrom(e.target.value); setPreset("custom"); }} /></Field>
+            <Field label="To"><input className="field" type="date" value={to} min={from} max={montrealToday()} onChange={(e) => { setTo(e.target.value); setPreset("custom"); }} /></Field>
+            <Field label="Group by">
+              <select className="field" value={granularity} onChange={(e) => setGranularity(e.target.value as typeof granularity)}>
+                <option value="day">Day</option>
+                <option value="week">Week</option>
+                <option value="month">Month</option>
+              </select>
+            </Field>
+            <Field label="Compare">
+              <select className="field" value={compare} onChange={(e) => setCompare(e.target.value as typeof compare)}>
+                <option value="none">None</option>
+                <option value="previous">Previous period</option>
+                <option value="yoy">Year over year</option>
+              </select>
+            </Field>
+            <button
+              type="button"
+              className="secondary-button min-h-10 px-3 py-2 text-xs"
+              disabled={!report}
+              title="Download the time series and all breakdowns as CSV"
+              onClick={() => report && downloadRevenueCsv(report)}
+            >
+              <Download size={15} /> Export CSV
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {loading && !report ? <ScreenSkeleton /> : !report ? null : (
+        <>
+          {report.missingPriceCount > 0 && (
+            <div className="flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm">
+              <AlertTriangle className="shrink-0 text-amber-600" size={18} />
+              <p className="text-amber-800">
+                <span className="font-bold">{report.missingPriceCount}</span> booking{report.missingPriceCount === 1 ? "" : "s"} in this range {report.missingPriceCount === 1 ? "has" : "have"} no numeric price and {report.missingPriceCount === 1 ? "is" : "are"} excluded from these totals. Set a price on the relevant services/packages to include them.
+              </p>
+            </div>
+          )}
+
+          {/* KPI cards */}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <KpiCard label="Expected revenue" value={totals ? fmtMoney(totals.expected) : "—"} sub={`${totals?.expectedCount ?? 0} bookings`} accent={COLOR_EXPECTED} />
+            <KpiCard label="Realized revenue" value={totals ? fmtMoney(totals.realized) : "—"} sub={`${totals?.realizedCount ?? 0} completed`} accent={COLOR_REALIZED} />
+            <KpiCard label="Outstanding (expected − realized)" value={totals ? fmtMoney(totals.expected - totals.realized) : "—"} sub="Booked but not yet completed" accent="#64748b" />
+            <KpiCard label="Avg per booking" value={totals && totals.expectedCount ? CAD_PRECISE.format(centsToDollars(totals.expected / totals.expectedCount)) : "—"} sub="Expected ÷ bookings" accent="#0891b2" />
+          </div>
+
+          {/* Trend */}
+          <div className="card p-5">
+            <div className="flex items-center justify-between">
+              <h3 className="font-extrabold text-ink">Revenue over time</h3>
+              <span className="text-xs text-slate-400">{report.from} → {report.to} · by {granularity}</span>
+            </div>
+            <div className="mt-4 h-[320px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trendData} margin={{ left: 8, right: 8 }}>
+                  <defs>
+                    <linearGradient id="gradExpected" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={COLOR_EXPECTED} stopOpacity={0.25} />
+                      <stop offset="95%" stopColor={COLOR_EXPECTED} stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gradRealized" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={COLOR_REALIZED} stopOpacity={0.25} />
+                      <stop offset="95%" stopColor={COLOR_REALIZED} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={24} />
+                  <YAxis tickFormatter={(v) => CAD.format(v)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+                  <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} />
+                  <Legend />
+                  <Area type="monotone" dataKey="expected" name="Expected" stroke={COLOR_EXPECTED} fill="url(#gradExpected)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="realized" name="Realized" stroke={COLOR_REALIZED} fill="url(#gradRealized)" strokeWidth={2} />
+                  {compare !== "none" && <Area type="monotone" dataKey="compare" name={compare === "previous" ? "Prev. period (expected)" : "Last year (expected)"} stroke="#94a3b8" strokeDasharray="4 3" fill="none" strokeWidth={1.5} />}
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Day of week */}
+          <div className="card p-5">
+            <h3 className="font-extrabold text-ink">By day of week</h3>
+            <div className="mt-4 h-[240px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={weekdayData} margin={{ left: 8, right: 8 }}>
+                  <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} />
+                  <YAxis tickFormatter={(v) => CAD.format(v)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+                  <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} cursor={{ fill: "#f1f5f9" }} />
+                  <Bar dataKey="expected" name="Expected" fill={COLOR_EXPECTED} radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Breakdowns */}
+          <div className="grid gap-6 lg:grid-cols-2">
+            <BreakdownChart title="By service" data={report.byService} empty="No priced bookings in range." />
+            <BreakdownChart title="By center" data={report.byCenter} empty="No priced bookings in range." />
+            <BreakdownChart title="By instructor" data={report.byInstructor} empty="No priced bookings in range." />
+            <BreakdownChart title="By package" data={report.byPackage} empty="No package bookings in range." />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /* Root                                                                       */
 /* -------------------------------------------------------------------------- */
 
@@ -3446,6 +3853,8 @@ export default function AdminPortal() {
     date: booking.date || "",
     booked_at: booking.booked_at || "",
     student: booking.student || "Private",
+    phone: booking.phone || undefined,
+    email: booking.email || undefined,
     service: booking.service,
     serviceSlug: booking.service_slug || undefined,
     center: booking.center,
@@ -3570,6 +3979,10 @@ export default function AdminPortal() {
 
   const title = useMemo(() => nav.find((item) => item.id === section)?.label || "Today", [section]);
 
+  // Hide role-restricted tabs (e.g. Revenue is owner/admin only). The worker enforces the same
+  // check server-side, so this is just to avoid showing a tab that would 403.
+  const visibleNav = useMemo(() => nav.filter((item) => !item.roles || item.roles.includes(user.role)), [user.role]);
+
   if (authState === "loading") {
     return <div className="grid min-h-screen place-items-center bg-cream"><LoaderCircle className="animate-spin text-brand-500" size={36} /></div>;
   }
@@ -3582,6 +3995,11 @@ export default function AdminPortal() {
     if (dataLoading) return <ScreenSkeleton />;
     if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} onReconcile={onReconcile} openSection={openSection} />;
     if (section === "bookings") return <BookingsScreen bookings={bookings} centers={centers} services={services} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} reload={loadAll} />;
+    if (section === "revenue") {
+      // Guard against a staff user reaching this via a stale URL; the API is gated too.
+      if (user.role !== "owner" && user.role !== "admin") return <PlaceholderDenied />;
+      return <RevenueScreen toast={toast} />;
+    }
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
     if (section === "packages") return <PackagesScreen packages={packages} services={services} centers={centers} reload={loadAll} toast={toast} />;
@@ -3603,7 +4021,7 @@ export default function AdminPortal() {
       <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col bg-ink lg:flex">
         <div className="border-b border-white/10 p-5"><AdminLogo /></div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <button
               className={clsx("flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition", section === item.id ? "bg-brand-600 text-white shadow-lg shadow-brand-900/20" : "text-slate-300 hover:bg-white/7 hover:text-white")}
               onClick={() => openSection(item.id)} key={item.id}
@@ -3626,7 +4044,7 @@ export default function AdminPortal() {
           <aside className="h-full w-[min(18rem,calc(100vw-2rem))] overflow-y-auto bg-ink p-4" onClick={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between p-1"><AdminLogo /><button className="text-white" onClick={() => setMobileNav(false)}><X /></button></div>
             <nav className="mt-7 space-y-1">
-              {nav.map((item) => (
+              {visibleNav.map((item) => (
                 <button className={clsx("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold", section === item.id ? "bg-brand-600 text-white" : "text-slate-300")} onClick={() => { openSection(item.id); setMobileNav(false); }} key={item.id}>
                   <item.icon size={18} /> {item.label}
                 </button>

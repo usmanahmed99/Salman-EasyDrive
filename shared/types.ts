@@ -25,6 +25,8 @@ export interface Service {
   slotIntervalMinutes: number;
   priceDisplay?: string;
   priceTaxMode: "none" | "incl" | "plus";
+  /** Numeric price in CAD cents for revenue analytics. Undefined = no numeric price entered. */
+  priceCents?: number;
   enabled: boolean;
   requestOnly?: boolean;
   formId?: string;
@@ -72,6 +74,8 @@ export interface Package {
   description: LocalizedText;
   priceDisplay?: string;
   priceTaxMode: "none" | "incl" | "plus";
+  /** Numeric price in CAD cents for revenue analytics. Undefined = no numeric price entered. */
+  priceCents?: number;
   enabled: boolean;
   sortOrder: number;
   items: PackageItem[];
@@ -274,4 +278,29 @@ export interface PublicConfig {
   turnstileSiteKey?: string;
   retentionDays: number;
   languages: Language[];
+}
+
+/** Revenue analytics (admin). One period/breakdown bucket; all money is integer CAD cents. */
+export interface RevenueBucket {
+  key: string;
+  expected: number;
+  realized: number;
+  expectedCount: number;
+  realizedCount: number;
+}
+
+export interface RevenueReport {
+  from: string;
+  to: string;
+  granularity: "day" | "week" | "month";
+  currency: string;
+  totals: Omit<RevenueBucket, "key">;
+  /** Count of in-range bookings with no numeric price (excluded from all sums). */
+  missingPriceCount: number;
+  series: RevenueBucket[];
+  byService: RevenueBucket[];
+  byPackage: RevenueBucket[];
+  byCenter: RevenueBucket[];
+  byInstructor: RevenueBucket[];
+  byWeekday: RevenueBucket[];
 }
