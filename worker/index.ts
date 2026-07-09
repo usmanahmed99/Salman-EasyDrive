@@ -152,6 +152,15 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
   const realizedSet = new Set(REVENUE_REALIZED_STATUSES);
   const weekdayFmt = new Intl.DateTimeFormat("en-CA", { weekday: "long", timeZone: REVENUE_TZ });
 
+  // Optional pivot: rows × cols cross-tab over any two distinct sensible dimensions. Measure
+  // (money vs count) is chosen client-side per tab, so we return all four aggregates per cell.
+  const PIVOT_DIMS = new Set(["service", "center", "instructor", "package", "weekday", "month"]);
+  const rawPivotRow = params.get("pivotRow") || "";
+  const rawPivotCol = params.get("pivotCol") || "";
+  const pivotRow = PIVOT_DIMS.has(rawPivotRow) ? rawPivotRow : "";
+  const pivotCol = PIVOT_DIMS.has(rawPivotCol) && rawPivotCol !== pivotRow ? rawPivotCol : "";
+  const pivotEnabled = Boolean(pivotRow && pivotCol);
+
   // ISO week start (Monday) for a YYYY-MM-DD local date, returned as YYYY-MM-DD.
   const weekStart = (localDate: string) => {
     const [y, m, d] = localDate.split("-").map(Number);
@@ -165,6 +174,9 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
     : granularity === "week" ? weekStart(localDate)
     : localDate;
 
+  // Month-of-year label (e.g. "January") for the seasonality view, from the local start date.
+  const monthFmt = new Intl.DateTimeFormat("en-CA", { month: "long", timeZone: REVENUE_TZ });
+
   type Bucket = { expected: number; realized: number; expectedCount: number; realizedCount: number };
   const empty = (): Bucket => ({ expected: 0, realized: 0, expectedCount: 0, realizedCount: 0 });
   const series = new Map<string, Bucket>();
@@ -173,40 +185,81 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
   const byCenter = new Map<string, Bucket>();
   const byInstructor = new Map<string, Bucket>();
   const byWeekday = new Map<string, Bucket>();
+  const byMonthOfYear = new Map<string, Bucket>();
+  // Pivot cells keyed by rowKey + NUL + colKey. A NUL byte can't appear in D1 text, making it a
+  // collision-proof delimiter (a naive "|" would break on a name that itself contains "|").
+  const PIVOT_SEP = "\u0000";
+  const pivot = new Map<string, Bucket>(); // key = rowKey + PIVOT_SEP + colKey
+  const pivotRowKeys = new Set<string>();
+  const pivotColKeys = new Set<string>();
   const totals = empty();
   let missingPriceCount = 0;
 
-  const add = (map: Map<string, Bucket>, key: string, cents: number, realized: boolean) => {
+  // Counts always accumulate (all in-range non-cancelled bookings). Money only accumulates when a
+  // numeric price exists — so the Bookings-count tab sees every booking while the Revenue tab only
+  // sums priced ones. `hasPrice` gates the cents contribution; the count contribution is unconditional.
+  const add = (map: Map<string, Bucket>, key: string, cents: number, hasPrice: boolean, realized: boolean) => {
     const b = map.get(key) ?? empty();
-    b.expected += cents;
+    if (hasPrice) b.expected += cents;
     b.expectedCount += 1;
-    if (realized) { b.realized += cents; b.realizedCount += 1; }
+    if (realized) { if (hasPrice) b.realized += cents; b.realizedCount += 1; }
     map.set(key, b);
+  };
+
+  // Resolve a booking's value for a pivot dimension. Package dimension collapses non-package bookings.
+  const dimValue = (row: typeof rows.results[number], localDate: string, dim: string): string | null => {
+    switch (dim) {
+      case "service": return row.service;
+      case "center": return row.center;
+      case "instructor": return row.instructor || "Unassigned";
+      case "package": return row.package_name || null; // skip standalone bookings in package pivots
+      case "weekday": return weekdayFmt.format(new Date(row.start_at));
+      case "month": return monthFmt.format(new Date(row.start_at));
+      default: return null;
+    }
   };
 
   for (const row of rows.results) {
     const localDate = dateInTimeZone(row.start_at, REVENUE_TZ);
     if (localDate < from || localDate > to) continue; // precise Montreal-local range filter
     if (!expectedSet.has(row.status)) continue;
+    const hasPrice = row.price_cents != null;
     const cents = row.price_cents ?? 0;
-    if (row.price_cents == null) { missingPriceCount += 1; continue; } // no numeric price → excluded from sums
+    if (!hasPrice) missingPriceCount += 1; // tracked for the "missing price" revenue warning
     const realized = realizedSet.has(row.status);
 
-    totals.expected += cents; totals.expectedCount += 1;
-    if (realized) { totals.realized += cents; totals.realizedCount += 1; }
+    totals.expectedCount += 1;
+    if (hasPrice) totals.expected += cents;
+    if (realized) { totals.realizedCount += 1; if (hasPrice) totals.realized += cents; }
 
-    add(series, periodKey(localDate), cents, realized);
-    add(byService, row.service, cents, realized);
-    add(byCenter, row.center, cents, realized);
-    add(byInstructor, row.instructor || "Unassigned", cents, realized);
-    add(byWeekday, weekdayFmt.format(new Date(row.start_at)), cents, realized);
-    if (row.package_name) add(byPackage, row.package_name, cents, realized);
+    add(series, periodKey(localDate), cents, hasPrice, realized);
+    add(byService, row.service, cents, hasPrice, realized);
+    add(byCenter, row.center, cents, hasPrice, realized);
+    add(byInstructor, row.instructor || "Unassigned", cents, hasPrice, realized);
+    add(byWeekday, weekdayFmt.format(new Date(row.start_at)), cents, hasPrice, realized);
+    add(byMonthOfYear, monthFmt.format(new Date(row.start_at)), cents, hasPrice, realized);
+    if (row.package_name) add(byPackage, row.package_name, cents, hasPrice, realized);
+
+    if (pivotEnabled) {
+      const r = dimValue(row, localDate, pivotRow);
+      const c = dimValue(row, localDate, pivotCol);
+      if (r != null && c != null) {
+        pivotRowKeys.add(r); pivotColKeys.add(c);
+        add(pivot, r + PIVOT_SEP + c, cents, hasPrice, realized);
+      }
+    }
   }
 
+  // Sort breakdowns by expected count desc so the ordering is stable whether the client shows money
+  // or counts (count is always populated; money can be all-zero when prices are unset).
   const toSortedArray = (map: Map<string, Bucket>, sortByKey = false) =>
     [...map.entries()]
       .map(([key, b]) => ({ key, ...b }))
-      .sort((a, b) => sortByKey ? a.key.localeCompare(b.key) : b.expected - a.expected);
+      .sort((a, b) => sortByKey ? a.key.localeCompare(b.key) : b.expectedCount - a.expectedCount);
+
+  // Calendar order for the month-of-year seasonality view.
+  const MONTH_ORDER = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const byMonthOrdered = MONTH_ORDER.filter((m) => byMonthOfYear.has(m)).map((m) => ({ key: m, ...byMonthOfYear.get(m)! }));
 
   // Build a gap-free series: enumerate EVERY period key from `from` to `to` and zero-fill the ones
   // with no bookings, so the chart's x-axis has uniform intervals (no collapsed/uneven spacing on
@@ -229,6 +282,24 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
   };
   const fullSeries = enumeratePeriods().map((key) => ({ key, ...(series.get(key) ?? empty()) }));
 
+  // Build the pivot payload: ordered row/col keys plus every non-empty cell.
+  const orderKeys = (dim: string, keys: Set<string>): string[] => {
+    const arr = [...keys];
+    if (dim === "weekday") return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].filter((k) => keys.has(k));
+    if (dim === "month") return MONTH_ORDER.filter((k) => keys.has(k));
+    return arr.sort((a, b) => a.localeCompare(b));
+  };
+  const pivotPayload = pivotEnabled ? {
+    row: pivotRow,
+    col: pivotCol,
+    rowKeys: orderKeys(pivotRow, pivotRowKeys),
+    colKeys: orderKeys(pivotCol, pivotColKeys),
+    cells: [...pivot.entries()].map(([key, b]) => {
+      const [r, c] = key.split(PIVOT_SEP);
+      return { row: r, col: c, ...b };
+    })
+  } : null;
+
   return json({
     from, to, granularity, currency: "CAD",
     totals,
@@ -238,7 +309,9 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
     byPackage: toSortedArray(byPackage),
     byCenter: toSortedArray(byCenter),
     byInstructor: toSortedArray(byInstructor),
-    byWeekday: toSortedArray(byWeekday)
+    byWeekday: toSortedArray(byWeekday),
+    byMonthOfYear: byMonthOrdered,
+    pivot: pivotPayload
   });
 }
 

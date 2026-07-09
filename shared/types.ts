@@ -303,4 +303,24 @@ export interface RevenueReport {
   byCenter: RevenueBucket[];
   byInstructor: RevenueBucket[];
   byWeekday: RevenueBucket[];
+  /** Seasonality: totals per calendar month (January–December), in order, only months present. */
+  byMonthOfYear: RevenueBucket[];
+  /** Cross-tab of two dimensions, present only when pivotRow & pivotCol were requested. */
+  pivot: RevenuePivot | null;
+}
+
+/** Dimensions that can be pivoted or broken down. */
+export type RevenueDimension = "service" | "center" | "instructor" | "package" | "weekday" | "month";
+
+export interface RevenuePivotCell extends Omit<RevenueBucket, "key"> {
+  row: string;
+  col: string;
+}
+
+export interface RevenuePivot {
+  row: RevenueDimension;
+  col: RevenueDimension;
+  rowKeys: string[];
+  colKeys: string[];
+  cells: RevenuePivotCell[];
 }

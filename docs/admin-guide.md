@@ -267,6 +267,8 @@ Drag a service by the grip handle (left of each row) to reorder the list. The or
 | Cancellation cutoff | How close to the appointment *student* self-service cancellation is blocked. Admin cancellation is never blocked. |
 | Base concurrency | How many bookings of this service can run at exactly the same time. Admin booking can exceed this; a real resource conflict still cannot. |
 | Resource requirements | How many cars and instructors each booking of this service needs |
+| Price (display) | The free-text price shown to students on the booking page (e.g. "$80", "450$"). Not used for calculations. |
+| Price for revenue (CAD $) | A **numeric** price used only by the [Analysis](#analysis) page. Leave blank if you don't track revenue for this service. Captured onto each booking at the moment it's made, so later price changes don't rewrite past revenue. |
 
 ### Resource requirements
 
@@ -294,7 +296,7 @@ A **package** bundles several sessions across one or more services into a single
 ### Create or edit a package
 
 1. Open **Packages** and choose **Add package** (or edit an existing one).
-2. Set the bilingual name and description, an optional display price and tax note.
+2. Set the bilingual name and description, an optional display price and tax note. Optionally set a **Price for revenue (CAD $)** — the numeric bundle price used by the [Analysis](#analysis) page. The whole bundle price is attributed to the package's **first (earliest) session** so it lands on one day and isn't double-counted across sessions.
 3. Under **Sessions in this package**, add one row per service and set how many sessions of it the package includes. The total session count is shown below the list.
 4. Choose which centers offer the package. Leave all unchecked to offer it everywhere.
 
@@ -323,6 +325,62 @@ In both modes, the booking page greys out the times that would break the order a
 1. Editing a package replaces its session list wholesale on save — future package bookings already made are not altered.
 2. If you remove a service from a package, any "Must follow" pointing at it is cleared automatically.
 3. After saving, make a test package booking and confirm the ordering behaves as intended at an enabled center.
+
+## Analysis
+
+The **Analysis** page (owner/admin only — it does not appear for staff) turns your bookings into revenue and volume insights over any date range. Open it from the left sidebar.
+
+### Revenue vs Bookings
+
+Two tabs at the top switch what every chart measures:
+
+- **Revenue** — sums money. Only bookings that have a **numeric price** count (set *Price for revenue* on the [Service](#services) or [Package](#packages)). A yellow banner tells you how many bookings in range have no price and are therefore excluded; those bookings still appear under the Bookings tab.
+- **Bookings** — counts bookings. Every booking counts regardless of price, so there's no "missing price" gap here.
+
+Both tabs share the same date range and split each total two ways:
+
+- **Expected** — everything booked that you still expect to earn/deliver: confirmed, pending, and completed bookings.
+- **Realized** — only what's actually happened: completed bookings.
+
+Cancelled and no-show bookings never count toward either.
+
+### Choosing the range
+
+- **Presets**: 7 days, 30 days, 90 days, Year to date, 12 months.
+- **From / To**: pick any custom start and end (Montreal local dates).
+- **Group by**: Day, Week, or Month — controls the buckets on the "over time" chart.
+- **Compare**: overlay the **previous period** (same length, immediately before) or **year over year** (same dates one year earlier) on the trend chart as a dashed line.
+
+### The cards
+
+- **KPI cards** — Expected, Realized, Outstanding (expected − realized), and either Average per booking (Revenue) or Realized rate (Bookings).
+- **Over time** — the trend line for the range, with the optional comparison overlay. Empty days show as zero so the timeline is evenly spaced.
+- **Seasonality** — the same totals grouped by **Day of week** or **Month of year** (toggle between them).
+- **Breakdowns** — by **service**, **center**, **instructor**, and **package**.
+
+Every card has a **Chart / Table** toggle so you can read exact numbers, and an **Export** button that downloads just that card as a CSV.
+
+### Compare two dimensions
+
+The bottom card cross-tabulates two dimensions at once — for example **services down the rows and centers across the columns**, with a value in each cell:
+
+1. Pick a **Rows** dimension and a **Columns** dimension (they can't be the same). Choose from service, center, instructor, package, day of week, or month.
+2. Pick an **Aggregate**: **Sum** (totals), **Average** (per-booking average — Revenue tab only), or **Count** (number of bookings).
+3. Cells are shaded from light to dark by value so patterns stand out, and the single highest and lowest cells are marked **MAX** (green) and **MIN** (amber). Row, column, and grand totals are shown.
+4. **Export table** downloads this grid on its own.
+
+### Exporting
+
+- Each card's **Export** button saves that card's data.
+- The **Export CSV** button in the top controls saves *everything* — totals, the time series, all breakdowns, and the current comparison table — in one file.
+- All exports are UTF-8 CSVs that open directly in Excel or Google Sheets. Revenue is written in dollars; counts as whole numbers.
+
+### If revenue looks low or empty
+
+Revenue only counts bookings that carry a numeric price. If totals look low:
+
+1. Set **Price for revenue** on the relevant [Services](#services) and [Packages](#packages).
+2. New bookings capture the price automatically from then on. Bookings made **before** a price was set stay uncounted until a one-time backfill is run against the database (a maintenance step — ask whoever manages deployments). Setting a price does **not** retroactively fill in old bookings on its own.
 
 ## Instructors and cars
 

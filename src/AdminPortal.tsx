@@ -58,6 +58,9 @@ import type {
   Package,
   ResourceGroup,
   RevenueBucket,
+  RevenueDimension,
+  RevenuePivot,
+  RevenuePivotCell,
   RevenueReport,
   Service
 } from "../shared/types";
@@ -104,7 +107,7 @@ interface AdminBooking {
 const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard; roles?: AdminUser["role"][] }> = [
   { id: "dashboard", label: "Today", icon: LayoutDashboard },
   { id: "bookings", label: "Bookings", icon: CalendarDays },
-  { id: "revenue", label: "Revenue", icon: TrendingUp, roles: ["owner", "admin"] },
+  { id: "revenue", label: "Analysis", icon: TrendingUp, roles: ["owner", "admin"] },
   { id: "centers", label: "Centers", icon: MapPin },
   { id: "services", label: "Services", icon: Gauge },
   { id: "packages", label: "Packages", icon: PackageIcon },
@@ -3517,6 +3520,7 @@ function PlaceholderDenied() {
 
 const CAD = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", maximumFractionDigits: 0 });
 const CAD_PRECISE = new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD", minimumFractionDigits: 2 });
+const NUM = new Intl.NumberFormat("en-CA");
 const centsToDollars = (cents: number) => cents / 100;
 const fmtMoney = (cents: number) => CAD.format(centsToDollars(cents));
 
@@ -3526,6 +3530,26 @@ const COLOR_EXPECTED = "#4f46e5";
 const COLOR_REALIZED = "#059669";
 // Categorical palette for breakdown bars (distinct hues, consistent saturation/lightness).
 const CATEGORY_COLORS = ["#4f46e5", "#0891b2", "#059669", "#d97706", "#db2777", "#7c3aed", "#0d9488", "#c026d3"];
+
+/**
+ * The "measure" the whole Analysis page is showing: revenue dollars or booking counts. Everything
+ * (KPIs, trend, breakdowns, pivot, CSV) reads a bucket through this so the two tabs share one report.
+ */
+type Measure = "revenue" | "count";
+/** Expected/realized value of a bucket for the active measure (cents for revenue, count otherwise). */
+const measureExpected = (b: { expected: number; expectedCount: number }, m: Measure) => m === "revenue" ? b.expected : b.expectedCount;
+const measureRealized = (b: { realized: number; realizedCount: number }, m: Measure) => m === "revenue" ? b.realized : b.realizedCount;
+/** For charts we plot dollars (cents/100) for revenue and raw counts otherwise. */
+const measureValue = (raw: number, m: Measure) => m === "revenue" ? centsToDollars(raw) : raw;
+/** Axis tick / tooltip formatting for the active measure. */
+const measureAxis = (v: number, m: Measure) => m === "revenue" ? CAD.format(v) : NUM.format(v);
+const measurePrecise = (v: number, m: Measure) => m === "revenue" ? CAD_PRECISE.format(v) : NUM.format(v);
+/** A KPI-sized string straight from a raw bucket value. */
+const fmtMeasure = (raw: number, m: Measure) => m === "revenue" ? fmtMoney(raw) : NUM.format(raw);
+
+const DIMENSION_LABELS: Record<RevenueDimension, string> = {
+  service: "Service", center: "Center", instructor: "Instructor", package: "Package", weekday: "Day of week", month: "Month of year"
+};
 
 type RangePreset = "7d" | "30d" | "90d" | "ytd" | "12m" | "custom";
 
@@ -3558,37 +3582,77 @@ function csvCell(value: string | number): string {
 }
 
 /**
- * Flatten a RevenueReport into a single CSV covering the time series and every breakdown, with
- * expected/realized shown in dollars (2dp) plus counts. One "section" column distinguishes the
- * time series from each breakdown dimension. Triggers a client-side download.
+ * Flatten a report into a single CSV: totals, time series, every breakdown (incl. month-of-year),
+ * and the current pivot if one is active. Money is dollars (2dp); counts are integers. Both are
+ * always included so one export covers the revenue and bookings views.
  */
 function downloadRevenueCsv(report: RevenueReport) {
-  const header = ["section", "key", "expected_cad", "realized_cad", "expected_count", "realized_count"];
+  const header = ["section", "row", "col", "expected_cad", "realized_cad", "expected_count", "realized_count"];
   const money = (cents: number) => (cents / 100).toFixed(2);
   const rowsFor = (section: string, buckets: RevenueBucket[]) =>
-    buckets.map((b) => [section, b.key, money(b.expected), money(b.realized), b.expectedCount, b.realizedCount]);
+    buckets.map((b) => [section, b.key, "", money(b.expected), money(b.realized), b.expectedCount, b.realizedCount]);
 
   const lines: (string | number)[][] = [
     header,
-    ["totals", `${report.from}..${report.to}`, money(report.totals.expected), money(report.totals.realized), report.totals.expectedCount, report.totals.realizedCount],
+    ["totals", `${report.from}..${report.to}`, "", money(report.totals.expected), money(report.totals.realized), report.totals.expectedCount, report.totals.realizedCount],
     ...rowsFor(`series_by_${report.granularity}`, report.series),
     ...rowsFor("by_service", report.byService),
     ...rowsFor("by_package", report.byPackage),
     ...rowsFor("by_center", report.byCenter),
     ...rowsFor("by_instructor", report.byInstructor),
-    ...rowsFor("by_weekday", report.byWeekday)
+    ...rowsFor("by_weekday", report.byWeekday),
+    ...rowsFor("by_month", report.byMonthOfYear)
   ];
-  const csv = lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
-  // Prepend a UTF-8 BOM so Excel opens accented names correctly.
+  if (report.pivot) {
+    const p = report.pivot;
+    lines.push(...p.cells.map((c) => [`comparison_${p.row}_by_${p.col}`, c.row, c.col, money(c.expected), money(c.realized), c.expectedCount, c.realizedCount]));
+  }
+  saveCsv(`analysis_${report.from}_to_${report.to}_by_${report.granularity}.csv`, lines);
+}
+
+/** Turn a grid of rows into a downloaded CSV file (UTF-8 BOM so Excel handles accents). */
+function saveCsv(filename: string, rows: (string | number)[][]) {
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `revenue_${report.from}_to_${report.to}_by_${report.granularity}.csv`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/** slugify a card title into a filename-safe token (e.g. "By service" -> "by-service"). */
+const slugForFile = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/**
+ * Export a single breakdown/seasonality card's buckets as CSV, with expected/realized in the card's
+ * own units (dollars for revenue, integer counts otherwise) plus both raw counts. `keyLabel` names
+ * the first column (e.g. "Service", "Day").
+ */
+function downloadBucketsCsv(name: string, keyLabel: string, buckets: RevenueBucket[], measure: Measure) {
+  const money = (cents: number) => (cents / 100).toFixed(2);
+  const isRev = measure === "revenue";
+  const header = isRev
+    ? [keyLabel, "expected_cad", "realized_cad", "expected_count", "realized_count"]
+    : [keyLabel, "expected_bookings", "completed_bookings"];
+  const rows: (string | number)[][] = [header, ...buckets.map((b) => isRev
+    ? [b.key, money(b.expected), money(b.realized), b.expectedCount, b.realizedCount]
+    : [b.key, b.expectedCount, b.realizedCount])];
+  saveCsv(`${slugForFile(name)}_${measure}.csv`, rows);
+}
+
+/** Small "Export" button used on each analysis card. */
+function CardExport({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      title="Export this card as CSV"
+      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50 disabled:opacity-40">
+      <Download size={13} /> Export
+    </button>
+  );
 }
 
 function KpiCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent: string }) {
@@ -3607,41 +3671,340 @@ function KpiCard({ label, value, sub, accent }: { label: string; value: string; 
 /** Weekdays in display order, so the day-of-week chart reads Mon→Sun regardless of data order. */
 const WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-function BreakdownChart({ title, data, empty }: { title: string; data: RevenueBucket[]; empty: string }) {
-  if (!data.length) return (
-    <div className="card p-5">
-      <h3 className="font-extrabold text-ink">{title}</h3>
-      <p className="mt-6 text-center text-sm text-slate-400">{empty}</p>
-    </div>
-  );
-  const rows = data.map((d) => ({ ...d, expectedDollars: centsToDollars(d.expected), realizedDollars: centsToDollars(d.realized) }));
+/** Small chart/table view switch reused on every breakdown card. */
+function ViewToggle({ view, onChange }: { view: "chart" | "table"; onChange: (v: "chart" | "table") => void }) {
   return (
-    <div className="card p-5">
-      <h3 className="font-extrabold text-ink">{title}</h3>
-      <div className="mt-4 h-[280px] w-full">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 16 }}>
-            <CartesianGrid horizontal={false} stroke="#e2e8f0" />
-            <XAxis type="number" tickFormatter={(v) => CAD.format(v)} tick={{ fontSize: 11, fill: "#94a3b8" }} />
-            <YAxis type="category" dataKey="key" width={120} tick={{ fontSize: 11, fill: "#475569" }} />
-            <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} cursor={{ fill: "#f1f5f9" }} />
-            <Bar dataKey="expectedDollars" name="Expected" radius={[0, 4, 4, 0]}>
-              {rows.map((_, i) => <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />)}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+    <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 text-[11px] font-bold">
+      {(["chart", "table"] as const).map((v) => (
+        <button key={v} onClick={() => onChange(v)}
+          className={clsx("px-2.5 py-1 capitalize", view === v ? "bg-brand-600 text-white" : "text-slate-500 hover:bg-slate-50")}>
+          {v}
+        </button>
+      ))}
     </div>
   );
 }
 
-function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
+/**
+ * A single breakdown card (by service / center / instructor / package). Shows a horizontal bar chart
+ * or an equivalent sortable table, toggled per-card. Values follow the active measure (revenue/count).
+ */
+function BreakdownCard({ title, data, empty, measure }: { title: string; data: RevenueBucket[]; empty: string; measure: Measure }) {
+  const [view, setView] = useState<"chart" | "table">("chart");
+  const rows = data.map((d) => ({ key: d.key, expected: d.expected, realized: d.realized, expectedCount: d.expectedCount, realizedCount: d.realizedCount, value: measureValue(measureExpected(d, measure), measure) }));
+  return (
+    <div className="card p-5">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="font-extrabold text-ink">{title}</h3>
+        {data.length > 0 && (
+          <div className="flex items-center gap-2">
+            <ViewToggle view={view} onChange={setView} />
+            <CardExport onClick={() => downloadBucketsCsv(title, title.replace(/^By /, ""), data, measure)} />
+          </div>
+        )}
+      </div>
+      {!data.length ? (
+        <p className="mt-6 text-center text-sm text-slate-400">{empty}</p>
+      ) : view === "chart" ? (
+        <div className="mt-4 h-[280px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 16 }}>
+              <CartesianGrid horizontal={false} stroke="#e2e8f0" />
+              <XAxis type="number" allowDecimals={measure === "revenue"} tickFormatter={(v) => measureAxis(v, measure)} tick={{ fontSize: 11, fill: "#94a3b8" }} />
+              <YAxis type="category" dataKey="key" width={120} tick={{ fontSize: 11, fill: "#475569" }} />
+              <ReTooltip formatter={(v) => measurePrecise(Number(v), measure)} cursor={{ fill: "#f1f5f9" }} />
+              <Bar dataKey="value" name={measure === "revenue" ? "Expected" : "Bookings"} radius={[0, 4, 4, 0]}>
+                {rows.map((_, i) => <Cell key={i} fill={CATEGORY_COLORS[i % CATEGORY_COLORS.length]} />)}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="mt-4 max-h-[280px] overflow-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="sticky top-0 bg-white text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              <tr><th className="py-2 pr-3">{title.replace(/^By /, "")}</th><th className="py-2 pr-3 text-right">{measure === "revenue" ? "Expected" : "Bookings"}</th><th className="py-2 text-right">{measure === "revenue" ? "Realized" : "Completed"}</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {data.map((d) => (
+                <tr key={d.key}>
+                  <td className="py-2 pr-3 text-slate-700">{d.key}</td>
+                  <td className="py-2 pr-3 text-right font-semibold text-ink">{fmtMeasure(measureExpected(d, measure), measure)}</td>
+                  <td className="py-2 text-right text-slate-500">{fmtMeasure(measureRealized(d, measure), measure)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Seasonality card: the same bar chart/table for either day-of-week or month-of-year, switchable.
+ * Values follow the active measure.
+ */
+function SeasonalityCard({ report, measure }: { report: RevenueReport; measure: Measure }) {
+  const [dim, setDim] = useState<"weekday" | "month">("weekday");
+  const [view, setView] = useState<"chart" | "table">("chart");
+  const source = dim === "weekday" ? report.byWeekday : report.byMonthOfYear;
+  // byWeekday/byMonthOfYear already arrive in calendar order from the server.
+  const rows = source.map((d) => ({ key: dim === "weekday" ? d.key.slice(0, 3) : d.key.slice(0, 3), full: d.key, expected: d.expected, realized: d.realized, expectedCount: d.expectedCount, realizedCount: d.realizedCount, value: measureValue(measureExpected(d, measure), measure) }));
+  return (
+    <div className="card p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <h3 className="font-extrabold text-ink">Seasonality</h3>
+          <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 text-[11px] font-bold">
+            {(["weekday", "month"] as const).map((d) => (
+              <button key={d} onClick={() => setDim(d)}
+                className={clsx("px-2.5 py-1", dim === d ? "bg-brand-600 text-white" : "text-slate-500 hover:bg-slate-50")}>
+                {d === "weekday" ? "Day of week" : "Month of year"}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <ViewToggle view={view} onChange={setView} />
+          <CardExport disabled={!source.length} onClick={() => downloadBucketsCsv(dim === "weekday" ? "By day of week" : "By month", dim === "weekday" ? "Day" : "Month", source, measure)} />
+        </div>
+      </div>
+      {!source.length ? (
+        <p className="mt-6 text-center text-sm text-slate-400">No bookings in range.</p>
+      ) : view === "chart" ? (
+        <div className="mt-4 h-[240px] w-full">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={rows} margin={{ left: 8, right: 8 }}>
+              <CartesianGrid vertical={false} stroke="#e2e8f0" />
+              <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} />
+              <YAxis allowDecimals={measure === "revenue"} tickFormatter={(v) => measureAxis(v, measure)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+              <ReTooltip formatter={(v) => measurePrecise(Number(v), measure)} cursor={{ fill: "#f1f5f9" }} />
+              <Bar dataKey="value" name={measure === "revenue" ? "Expected" : "Bookings"} fill={COLOR_EXPECTED} radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+      ) : (
+        <div className="mt-4 max-h-[240px] overflow-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="sticky top-0 bg-white text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              <tr><th className="py-2 pr-3">{dim === "weekday" ? "Day" : "Month"}</th><th className="py-2 pr-3 text-right">{measure === "revenue" ? "Expected" : "Bookings"}</th><th className="py-2 text-right">{measure === "revenue" ? "Realized" : "Completed"}</th></tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {source.map((d) => (
+                <tr key={d.key}>
+                  <td className="py-2 pr-3 text-slate-700">{d.key}</td>
+                  <td className="py-2 pr-3 text-right font-semibold text-ink">{fmtMeasure(measureExpected(d, measure), measure)}</td>
+                  <td className="py-2 text-right text-slate-500">{fmtMeasure(measureRealized(d, measure), measure)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Map key for a pivot cell. Uses Unit Separator (U+241F), which never appears in DB text names. */
+const pivotKey = (row: string, col: string) => `${row}␟${col}`;
+
+/** Pivot cell aggregation. Sum/Average/Count are all derived from the per-cell buckets. */
+type PivotAgg = "sum" | "avg" | "count";
+const PIVOT_AGG_LABELS: Record<PivotAgg, string> = { sum: "Sum", avg: "Average", count: "Count" };
+
+/** Plain-language summary of what the comparison table is showing, for the card subtitle. */
+function pivotSummary(agg: PivotAgg, measure: Measure): string {
+  if (agg === "count") return "Number of bookings";
+  if (measure === "count") return "Total bookings";
+  return agg === "avg" ? "Average revenue per booking" : "Total revenue";
+}
+
+/** Aggregate a bucket into a single number for the chosen aggregation + measure. */
+function aggValue(b: { expected: number; realized: number; expectedCount: number; realizedCount: number }, agg: PivotAgg, measure: Measure): number {
+  if (agg === "count") return b.expectedCount;
+  const total = measureExpected(b, measure);
+  if (agg === "sum") return total;
+  return b.expectedCount ? total / b.expectedCount : 0; // avg = total ÷ bookings
+}
+/**
+ * Format a pivot value for the chosen aggregation. Count is an integer. For revenue, `v` is in CENTS
+ * for sum & avg (aggValue derives from measureExpected which returns cents), so avg divides by 100 to
+ * dollars — same convention fmtMeasure uses for sum. For count-measure, values are plain numbers.
+ */
+function fmtAgg(v: number, agg: PivotAgg, measure: Measure): string {
+  if (agg === "count") return NUM.format(v);
+  if (agg === "avg") return measure === "revenue" ? CAD_PRECISE.format(v / 100) : NUM.format(Math.round(v * 100) / 100);
+  return fmtMeasure(v, measure);
+}
+
+/**
+ * Build a pivot CSV (matrix layout: one row per row-key, one column per col-key) for the current
+ * dimensions/aggregation/measure, with totals. Separate from the full report CSV so a user can
+ * export just the cross-tab they're looking at.
+ */
+function downloadPivotCsv(pivot: RevenuePivot, agg: PivotAgg, measure: Measure, get: (r: string, c: string) => number, rowTot: (r: string) => number, colTot: (c: string) => number, grand: number) {
+  // Values arrive in the aggregation's native units: cents for revenue sum/avg, integers for count.
+  // Convert money to dollars for the CSV; counts and count-mode values pass through as-is.
+  const out = (v: number) => (measure === "revenue" && agg !== "count") ? (v / 100).toFixed(2) : (agg === "avg" ? String(Math.round(v * 100) / 100) : String(v));
+  const header = [`${DIMENSION_LABELS[pivot.row]} \\ ${DIMENSION_LABELS[pivot.col]}`, ...pivot.colKeys, "Total"];
+  const body = pivot.rowKeys.map((r) => [r, ...pivot.colKeys.map((c) => out(get(r, c))), out(rowTot(r))]);
+  const totalRow = ["Total", ...pivot.colKeys.map((c) => out(colTot(c))), out(grand)];
+  saveCsv(`comparison_${pivot.row}_by_${pivot.col}_${agg}_${measure}.csv`, [header, ...body, totalRow]);
+}
+
+/**
+ * Cross-tab pivot: user picks a row dimension, a distinct column dimension, and an aggregation
+ * (Sum/Average/Count). Body cells are heatmap-shaded by value, the single highest/lowest non-empty
+ * cell is badged, and the matrix is exportable on its own. Measure (revenue $/count) follows the tab.
+ */
+function PivotTable({ report, measure, row, col, onRow, onCol }: {
+  report: RevenueReport; measure: Measure;
+  row: RevenueDimension; col: RevenueDimension;
+  onRow: (d: RevenueDimension) => void; onCol: (d: RevenueDimension) => void;
+}) {
+  const dims: RevenueDimension[] = ["service", "center", "instructor", "package", "weekday", "month"];
+  const [aggChoice, setAggChoice] = useState<PivotAgg>("sum");
+  // Average is only meaningful for revenue (avg $ per booking); for booking counts it degenerates to
+  // 1, so it's offered only in the revenue measure. Coerce a stale "avg" to "sum" on the count tab.
+  const availableAggs: PivotAgg[] = measure === "revenue" ? ["sum", "avg", "count"] : ["sum", "count"];
+  const agg: PivotAgg = availableAggs.includes(aggChoice) ? aggChoice : "sum";
+  const setAgg = setAggChoice;
+  const pivot = report.pivot;
+
+  // Per-cell aggregated value + bucket lookup (buckets kept so totals can re-derive averages).
+  const bucketMap = useMemo(() => {
+    const m = new Map<string, RevenuePivotCell>();
+    if (pivot) for (const c of pivot.cells) m.set(pivotKey(c.row, c.col), c);
+    return m;
+  }, [pivot]);
+  const cellVal = (r: string, c: string) => { const b = bucketMap.get(pivotKey(r, c)); return b ? aggValue(b, agg, measure) : 0; };
+
+  // Row/col/grand aggregates. Sum/Count add up; Average is the weighted average over the group's
+  // bookings (Σtotal ÷ Σcount), not a mean-of-cells, so totals stay meaningful.
+  const groupAgg = (cells: RevenuePivotCell[]): number => {
+    if (agg === "count") return cells.reduce((s, b) => s + b.expectedCount, 0);
+    const total = cells.reduce((s, b) => s + measureExpected(b, measure), 0);
+    if (agg === "sum") return total;
+    const n = cells.reduce((s, b) => s + b.expectedCount, 0);
+    return n ? total / n : 0;
+  };
+  const cellsByRow = new Map<string, RevenuePivotCell[]>();
+  const cellsByCol = new Map<string, RevenuePivotCell[]>();
+  const allCells = pivot?.cells ?? [];
+  for (const c of allCells) {
+    (cellsByRow.get(c.row) ?? cellsByRow.set(c.row, []).get(c.row)!).push(c);
+    (cellsByCol.get(c.col) ?? cellsByCol.set(c.col, []).get(c.col)!).push(c);
+  }
+  const rowTot = (r: string) => groupAgg(cellsByRow.get(r) ?? []);
+  const colTot = (c: string) => groupAgg(cellsByCol.get(c) ?? []);
+  const grand = groupAgg(allCells);
+
+  // Heatmap range + min/max markers over the non-empty body cells only.
+  const bodyValues: { key: string; v: number }[] = [];
+  if (pivot) for (const r of pivot.rowKeys) for (const c of pivot.colKeys) {
+    const b = bucketMap.get(pivotKey(r, c));
+    if (b) bodyValues.push({ key: pivotKey(r, c), v: aggValue(b, agg, measure) });
+  }
+  const min = bodyValues.length ? Math.min(...bodyValues.map((x) => x.v)) : 0;
+  const max = bodyValues.length ? Math.max(...bodyValues.map((x) => x.v)) : 0;
+  const minKey = bodyValues.find((x) => x.v === min)?.key;
+  const maxKey = bodyValues.find((x) => x.v === max)?.key;
+  // Tint: 0 (min) → 0.14 (max) alpha of brand indigo. Distinct min/max get a ring instead.
+  const tint = (v: number) => max === min ? "transparent" : `rgba(79,70,229,${(0.02 + 0.16 * (v - min) / (max - min)).toFixed(3)})`;
+
+  const empty = <span className="text-slate-300">—</span>;
+
+  return (
+    <div className="card p-5">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h3 className="font-extrabold text-ink">Compare two dimensions</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            {pivotSummary(agg, measure)} by {DIMENSION_LABELS[row].toLowerCase()} and {DIMENSION_LABELS[col].toLowerCase()}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-3">
+          <Field label="Rows">
+            <select className="field" value={row} onChange={(e) => onRow(e.target.value as RevenueDimension)}>
+              {dims.filter((d) => d !== col).map((d) => <option key={d} value={d}>{DIMENSION_LABELS[d]}</option>)}
+            </select>
+          </Field>
+          <Field label="Columns">
+            <select className="field" value={col} onChange={(e) => onCol(e.target.value as RevenueDimension)}>
+              {dims.filter((d) => d !== row).map((d) => <option key={d} value={d}>{DIMENSION_LABELS[d]}</option>)}
+            </select>
+          </Field>
+          <Field label="Aggregate">
+            <select className="field" value={agg} onChange={(e) => setAgg(e.target.value as PivotAgg)}>
+              {availableAggs.map((a) => <option key={a} value={a}>{PIVOT_AGG_LABELS[a]}</option>)}
+            </select>
+          </Field>
+          <button type="button" className="secondary-button min-h-10 px-3 py-2 text-xs" disabled={!pivot || !pivot.rowKeys.length}
+            title="Export just this table as CSV"
+            onClick={() => pivot && downloadPivotCsv(pivot, agg, measure, cellVal, rowTot, colTot, grand)}>
+            <Download size={15} /> Export table
+          </button>
+        </div>
+      </div>
+      {!pivot || !pivot.rowKeys.length || !pivot.colKeys.length ? (
+        <p className="mt-6 text-center text-sm text-slate-400">No data for this combination in range.</p>
+      ) : (
+        <div className="mt-4 overflow-auto">
+          <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+            <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+              <tr>
+                <th className="sticky left-0 z-10 bg-white py-2 pr-3">{DIMENSION_LABELS[pivot.row]} \ {DIMENSION_LABELS[pivot.col]}</th>
+                {pivot.colKeys.map((c) => <th key={c} className="whitespace-nowrap px-3 py-2 text-right">{c}</th>)}
+                <th className="px-3 py-2 text-right text-ink">Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pivot.rowKeys.map((r) => (
+                <tr key={r} className="group">
+                  <td className="sticky left-0 z-10 bg-white py-2 pr-3 font-semibold text-ink group-hover:bg-slate-50">{r}</td>
+                  {pivot.colKeys.map((c) => {
+                    const key = pivotKey(r, c);
+                    const b = bucketMap.get(key);
+                    const v = b ? aggValue(b, agg, measure) : 0;
+                    const isMax = key === maxKey && bodyValues.length > 1;
+                    const isMin = key === minKey && bodyValues.length > 1 && minKey !== maxKey;
+                    return (
+                      <td key={c} className="relative px-3 py-2 text-right tabular-nums text-slate-700" style={{ backgroundColor: b ? tint(v) : "transparent" }}>
+                        <span className={clsx(isMax && "font-extrabold text-emerald-700", isMin && "font-semibold text-amber-700")}>
+                          {b ? fmtAgg(v, agg, measure) : empty}
+                        </span>
+                        {isMax && <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-bold uppercase text-emerald-700">max</span>}
+                        {isMin && <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] font-bold uppercase text-amber-700">min</span>}
+                      </td>
+                    );
+                  })}
+                  <td className="px-3 py-2 text-right font-bold tabular-nums text-ink">{fmtAgg(rowTot(r), agg, measure)}</td>
+                </tr>
+              ))}
+              <tr className="bg-slate-50">
+                <td className="sticky left-0 z-10 border-t-2 border-slate-200 bg-slate-50 py-2 pr-3 font-bold uppercase tracking-wider text-slate-400">Total</td>
+                {pivot.colKeys.map((c) => <td key={c} className="border-t-2 border-slate-200 px-3 py-2 text-right font-bold tabular-nums text-ink">{fmtAgg(colTot(c), agg, measure)}</td>)}
+                <td className="border-t-2 border-slate-200 px-3 py-2 text-right font-extrabold tabular-nums text-brand-700">{fmtAgg(grand, agg, measure)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalysisScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
+  const [measure, setMeasure] = useState<Measure>("revenue");
   const [preset, setPreset] = useState<RangePreset>("30d");
   const initial = presetRange("30d");
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
   const [compare, setCompare] = useState<"none" | "previous" | "yoy">("none");
+  const [pivotRow, setPivotRow] = useState<RevenueDimension>("service");
+  const [pivotCol, setPivotCol] = useState<RevenueDimension>("center");
 
   const [report, setReport] = useState<RevenueReport | null>(null);
   const [compareReport, setCompareReport] = useState<RevenueReport | null>(null);
@@ -3657,7 +4020,7 @@ function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const primary = adminApi.revenue({ from, to, granularity });
+    const primary = adminApi.revenue({ from, to, granularity, pivotRow, pivotCol });
     const comparison = compare === "none"
       ? Promise.resolve(null)
       : adminApi.revenue({ ...(compare === "previous" ? previousRange(from, to) : yearAgoRange(from, to)), granularity });
@@ -3670,32 +4033,36 @@ function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
       .catch((err) => { if (!cancelled) toast.show("error", errorMessage(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [from, to, granularity, compare, toast]);
+  }, [from, to, granularity, compare, pivotRow, pivotCol, toast]);
 
-  // Merge primary + comparison series positionally (period N of each window) so the overlay lines up
-  // even though the calendar labels differ. The x-axis shows the primary window's period labels.
+  // Trend rows for the active measure. Comparison overlays the prior/YoY window positionally
+  // (period N vs period N) so the two align even though their calendar labels differ.
   const trendData = useMemo(() => {
     if (!report) return [];
     return report.series.map((point, i) => ({
       key: point.key,
-      expected: centsToDollars(point.expected),
-      realized: centsToDollars(point.realized),
-      compare: compareReport?.series[i] ? centsToDollars(compareReport.series[i].expected) : undefined
+      expected: measureValue(measureExpected(point, measure), measure),
+      realized: measureValue(measureRealized(point, measure), measure),
+      compare: compareReport?.series[i] ? measureValue(measureExpected(compareReport.series[i], measure), measure) : undefined
     }));
-  }, [report, compareReport]);
-
-  const weekdayData = useMemo(() => {
-    if (!report) return [];
-    const map = new Map(report.byWeekday.map((b) => [b.key, b]));
-    return WEEKDAY_ORDER
-      .filter((day) => map.has(day))
-      .map((day) => ({ key: day.slice(0, 3), expected: centsToDollars(map.get(day)!.expected) }));
-  }, [report]);
+  }, [report, compareReport, measure]);
 
   const totals = report?.totals;
+  const isRevenue = measure === "revenue";
+  const measureNoun = isRevenue ? "revenue" : "bookings";
 
   return (
     <div className="space-y-6">
+      {/* Measure tabs */}
+      <div className="flex gap-2">
+        {(["revenue", "count"] as const).map((m) => (
+          <button key={m} onClick={() => setMeasure(m)}
+            className={clsx("rounded-xl px-4 py-2 text-sm font-bold", measure === m ? "bg-brand-600 text-white shadow-sm" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50")}>
+            {m === "revenue" ? "Revenue" : "Bookings"}
+          </button>
+        ))}
+      </div>
+
       {/* Controls */}
       <div className="card p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -3728,7 +4095,7 @@ function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
               type="button"
               className="secondary-button min-h-10 px-3 py-2 text-xs"
               disabled={!report}
-              title="Download the time series and all breakdowns as CSV"
+              title="Download the time series, all breakdowns, and the current pivot as CSV"
               onClick={() => report && downloadRevenueCsv(report)}
             >
               <Download size={15} /> Export CSV
@@ -3739,28 +4106,31 @@ function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
 
       {loading && !report ? <ScreenSkeleton /> : !report ? null : (
         <>
-          {report.missingPriceCount > 0 && (
+          {isRevenue && report.missingPriceCount > 0 && (
             <div className="flex items-start gap-3 rounded-xl border border-amber-100 bg-amber-50 p-4 text-sm">
               <AlertTriangle className="shrink-0 text-amber-600" size={18} />
               <p className="text-amber-800">
-                <span className="font-bold">{report.missingPriceCount}</span> booking{report.missingPriceCount === 1 ? "" : "s"} in this range {report.missingPriceCount === 1 ? "has" : "have"} no numeric price and {report.missingPriceCount === 1 ? "is" : "are"} excluded from these totals. Set a price on the relevant services/packages to include them.
+                <span className="font-bold">{report.missingPriceCount}</span> booking{report.missingPriceCount === 1 ? "" : "s"} in this range {report.missingPriceCount === 1 ? "has" : "have"} no numeric price and {report.missingPriceCount === 1 ? "is" : "are"} excluded from revenue totals. Set a price on the relevant services/packages to include them. (They still count in the Bookings view.)
               </p>
             </div>
           )}
 
           {/* KPI cards */}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <KpiCard label="Expected revenue" value={totals ? fmtMoney(totals.expected) : "—"} sub={`${totals?.expectedCount ?? 0} bookings`} accent={COLOR_EXPECTED} />
-            <KpiCard label="Realized revenue" value={totals ? fmtMoney(totals.realized) : "—"} sub={`${totals?.realizedCount ?? 0} completed`} accent={COLOR_REALIZED} />
-            <KpiCard label="Outstanding (expected − realized)" value={totals ? fmtMoney(totals.expected - totals.realized) : "—"} sub="Booked but not yet completed" accent="#64748b" />
-            <KpiCard label="Avg per booking" value={totals && totals.expectedCount ? CAD_PRECISE.format(centsToDollars(totals.expected / totals.expectedCount)) : "—"} sub="Expected ÷ bookings" accent="#0891b2" />
+            <KpiCard label={isRevenue ? "Expected revenue" : "Expected bookings"} value={totals ? fmtMeasure(measureExpected(totals, measure), measure) : "—"} sub={`${totals?.expectedCount ?? 0} bookings`} accent={COLOR_EXPECTED} />
+            <KpiCard label={isRevenue ? "Realized revenue" : "Completed bookings"} value={totals ? fmtMeasure(measureRealized(totals, measure), measure) : "—"} sub={`${totals?.realizedCount ?? 0} completed`} accent={COLOR_REALIZED} />
+            <KpiCard label="Outstanding (expected − realized)" value={totals ? fmtMeasure(measureExpected(totals, measure) - measureRealized(totals, measure), measure) : "—"} sub="Booked but not yet completed" accent="#64748b" />
+            <KpiCard label={isRevenue ? "Avg per booking" : "Realized rate"} value={totals && totals.expectedCount ? (isRevenue ? CAD_PRECISE.format(centsToDollars(totals.expected / totals.expectedCount)) : `${Math.round((totals.realizedCount / totals.expectedCount) * 100)}%`) : "—"} sub={isRevenue ? "Expected ÷ bookings" : "Completed ÷ expected"} accent="#0891b2" />
           </div>
 
           {/* Trend */}
           <div className="card p-5">
-            <div className="flex items-center justify-between">
-              <h3 className="font-extrabold text-ink">Revenue over time</h3>
-              <span className="text-xs text-slate-400">{report.from} → {report.to} · by {granularity}</span>
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="font-extrabold text-ink">{isRevenue ? "Revenue" : "Bookings"} over time</h3>
+              <div className="flex items-center gap-3">
+                <span className="hidden text-xs text-slate-400 sm:inline">{report.from} → {report.to} · by {granularity}</span>
+                <CardExport onClick={() => downloadBucketsCsv(`${isRevenue ? "revenue" : "bookings"}-over-time-by-${granularity}`, granularity === "month" ? "Month" : granularity === "week" ? "Week starting" : "Date", report.series, measure)} />
+              </div>
             </div>
             <div className="mt-4 h-[320px] w-full">
               <ResponsiveContainer width="100%" height="100%">
@@ -3777,40 +4147,30 @@ function RevenueScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
                   </defs>
                   <CartesianGrid vertical={false} stroke="#e2e8f0" />
                   <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={24} />
-                  <YAxis tickFormatter={(v) => CAD.format(v)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
-                  <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} />
+                  <YAxis allowDecimals={measure === "revenue"} tickFormatter={(v) => measureAxis(Number(v), measure)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+                  <ReTooltip formatter={(v) => measurePrecise(Number(v), measure)} />
                   <Legend />
-                  <Area type="monotone" dataKey="expected" name="Expected" stroke={COLOR_EXPECTED} fill="url(#gradExpected)" strokeWidth={2} />
-                  <Area type="monotone" dataKey="realized" name="Realized" stroke={COLOR_REALIZED} fill="url(#gradRealized)" strokeWidth={2} />
-                  {compare !== "none" && <Area type="monotone" dataKey="compare" name={compare === "previous" ? "Prev. period (expected)" : "Last year (expected)"} stroke="#94a3b8" strokeDasharray="4 3" fill="none" strokeWidth={1.5} />}
+                  <Area type="monotone" dataKey="expected" name={isRevenue ? "Expected" : "Bookings"} stroke={COLOR_EXPECTED} fill="url(#gradExpected)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="realized" name={isRevenue ? "Realized" : "Completed"} stroke={COLOR_REALIZED} fill="url(#gradRealized)" strokeWidth={2} />
+                  {compare !== "none" && <Area type="monotone" dataKey="compare" name={compare === "previous" ? "Prev. period" : "Last year"} stroke="#94a3b8" strokeDasharray="4 3" fill="none" strokeWidth={1.5} />}
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
 
-          {/* Day of week */}
-          <div className="card p-5">
-            <h3 className="font-extrabold text-ink">By day of week</h3>
-            <div className="mt-4 h-[240px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={weekdayData} margin={{ left: 8, right: 8 }}>
-                  <CartesianGrid vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} />
-                  <YAxis tickFormatter={(v) => CAD.format(v)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
-                  <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} cursor={{ fill: "#f1f5f9" }} />
-                  <Bar dataKey="expected" name="Expected" fill={COLOR_EXPECTED} radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+          {/* Seasonality (day-of-week / month-of-year, chart or table) */}
+          <SeasonalityCard report={report} measure={measure} />
 
           {/* Breakdowns */}
           <div className="grid gap-6 lg:grid-cols-2">
-            <BreakdownChart title="By service" data={report.byService} empty="No priced bookings in range." />
-            <BreakdownChart title="By center" data={report.byCenter} empty="No priced bookings in range." />
-            <BreakdownChart title="By instructor" data={report.byInstructor} empty="No priced bookings in range." />
-            <BreakdownChart title="By package" data={report.byPackage} empty="No package bookings in range." />
+            <BreakdownCard title="By service" data={report.byService} empty={`No ${measureNoun} in range.`} measure={measure} />
+            <BreakdownCard title="By center" data={report.byCenter} empty={`No ${measureNoun} in range.`} measure={measure} />
+            <BreakdownCard title="By instructor" data={report.byInstructor} empty={`No ${measureNoun} in range.`} measure={measure} />
+            <BreakdownCard title="By package" data={report.byPackage} empty="No package bookings in range." measure={measure} />
           </div>
+
+          {/* Pivot */}
+          <PivotTable report={report} measure={measure} row={pivotRow} col={pivotCol} onRow={setPivotRow} onCol={setPivotCol} />
         </>
       )}
     </div>
@@ -3998,7 +4358,7 @@ export default function AdminPortal() {
     if (section === "revenue") {
       // Guard against a staff user reaching this via a stale URL; the API is gated too.
       if (user.role !== "owner" && user.role !== "admin") return <PlaceholderDenied />;
-      return <RevenueScreen toast={toast} />;
+      return <AnalysisScreen toast={toast} />;
     }
     if (section === "centers") return <CentersScreen centers={centers} bookings={bookings} groups={groups} resources={resources} reload={loadAll} toast={toast} />;
     if (section === "services") return <ServicesScreen services={services} centers={centers} forms={forms} requirements={requirements} reload={() => loadAll({ requirements: true })} toast={toast} />;
