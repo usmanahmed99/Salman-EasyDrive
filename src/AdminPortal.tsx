@@ -59,6 +59,8 @@ import type {
   ResourceGroup,
   RevenueBucket,
   RevenueDimension,
+  RevenuePivot,
+  RevenuePivotCell,
   RevenueReport,
   Service
 } from "../shared/types";
@@ -3764,10 +3766,57 @@ function SeasonalityCard({ report, measure }: { report: RevenueReport; measure: 
 /** Map key for a pivot cell. Uses Unit Separator (U+241F), which never appears in DB text names. */
 const pivotKey = (row: string, col: string) => `${row}␟${col}`;
 
+/** Pivot cell aggregation. Sum/Average/Count are all derived from the per-cell buckets. */
+type PivotAgg = "sum" | "avg" | "count";
+const PIVOT_AGG_LABELS: Record<PivotAgg, string> = { sum: "Sum", avg: "Average", count: "Count" };
+
+/** Aggregate a bucket into a single number for the chosen aggregation + measure. */
+function aggValue(b: { expected: number; realized: number; expectedCount: number; realizedCount: number }, agg: PivotAgg, measure: Measure): number {
+  if (agg === "count") return b.expectedCount;
+  const total = measureExpected(b, measure);
+  if (agg === "sum") return total;
+  return b.expectedCount ? total / b.expectedCount : 0; // avg = total ÷ bookings
+}
 /**
- * Cross-tab pivot: user picks a row dimension and a distinct column dimension; the server returns
- * the cells and we render a matrix (with row/column/grand totals) in the active measure. The row and
- * column pickers exclude each other so the two axes are always different.
+ * Format a pivot value for the chosen aggregation. Count is an integer. For revenue, `v` is in CENTS
+ * for sum & avg (aggValue derives from measureExpected which returns cents), so avg divides by 100 to
+ * dollars — same convention fmtMeasure uses for sum. For count-measure, values are plain numbers.
+ */
+function fmtAgg(v: number, agg: PivotAgg, measure: Measure): string {
+  if (agg === "count") return NUM.format(v);
+  if (agg === "avg") return measure === "revenue" ? CAD_PRECISE.format(v / 100) : NUM.format(Math.round(v * 100) / 100);
+  return fmtMeasure(v, measure);
+}
+
+/**
+ * Build a pivot CSV (matrix layout: one row per row-key, one column per col-key) for the current
+ * dimensions/aggregation/measure, with totals. Separate from the full report CSV so a user can
+ * export just the cross-tab they're looking at.
+ */
+function downloadPivotCsv(pivot: RevenuePivot, agg: PivotAgg, measure: Measure, get: (r: string, c: string) => number, rowTot: (r: string) => number, colTot: (c: string) => number, grand: number) {
+  // Values arrive in the aggregation's native units: cents for revenue sum/avg, integers for count.
+  // Convert money to dollars for the CSV; counts and count-mode values pass through as-is.
+  const out = (v: number) => (measure === "revenue" && agg !== "count") ? (v / 100).toFixed(2) : (agg === "avg" ? String(Math.round(v * 100) / 100) : String(v));
+  const header = [`${DIMENSION_LABELS[pivot.row]} \\ ${DIMENSION_LABELS[pivot.col]}`, ...pivot.colKeys, "Total"];
+  const body = pivot.rowKeys.map((r) => [r, ...pivot.colKeys.map((c) => out(get(r, c))), out(rowTot(r))]);
+  const totalRow = ["Total", ...pivot.colKeys.map((c) => out(colTot(c))), out(grand)];
+  const lines = [header, ...body, totalRow];
+  const csv = lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `pivot_${pivot.row}_x_${pivot.col}_${agg}_${measure}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Cross-tab pivot: user picks a row dimension, a distinct column dimension, and an aggregation
+ * (Sum/Average/Count). Body cells are heatmap-shaded by value, the single highest/lowest non-empty
+ * cell is badged, and the matrix is exportable on its own. Measure (revenue $/count) follows the tab.
  */
 function PivotTable({ report, measure, row, col, onRow, onCol }: {
   report: RevenueReport; measure: Measure;
@@ -3775,29 +3824,64 @@ function PivotTable({ report, measure, row, col, onRow, onCol }: {
   onRow: (d: RevenueDimension) => void; onCol: (d: RevenueDimension) => void;
 }) {
   const dims: RevenueDimension[] = ["service", "center", "instructor", "package", "weekday", "month"];
+  const [aggChoice, setAggChoice] = useState<PivotAgg>("sum");
+  // Average is only meaningful for revenue (avg $ per booking); for booking counts it degenerates to
+  // 1, so it's offered only in the revenue measure. Coerce a stale "avg" to "sum" on the count tab.
+  const availableAggs: PivotAgg[] = measure === "revenue" ? ["sum", "avg", "count"] : ["sum", "count"];
+  const agg: PivotAgg = availableAggs.includes(aggChoice) ? aggChoice : "sum";
+  const setAgg = setAggChoice;
   const pivot = report.pivot;
-  // cell lookup + row/col/grand totals in the active measure.
-  const cellMap = useMemo(() => {
-    const m = new Map<string, number>();
-    if (pivot) for (const c of pivot.cells) m.set(pivotKey(c.row, c.col), measureExpected(c, measure));
+
+  // Per-cell aggregated value + bucket lookup (buckets kept so totals can re-derive averages).
+  const bucketMap = useMemo(() => {
+    const m = new Map<string, RevenuePivotCell>();
+    if (pivot) for (const c of pivot.cells) m.set(pivotKey(c.row, c.col), c);
     return m;
-  }, [pivot, measure]);
-  const rowTotals = new Map<string, number>();
-  const colTotals = new Map<string, number>();
-  let grand = 0;
-  if (pivot) {
-    for (const c of pivot.cells) {
-      const v = measureExpected(c, measure);
-      rowTotals.set(c.row, (rowTotals.get(c.row) ?? 0) + v);
-      colTotals.set(c.col, (colTotals.get(c.col) ?? 0) + v);
-      grand += v;
-    }
+  }, [pivot]);
+  const cellVal = (r: string, c: string) => { const b = bucketMap.get(pivotKey(r, c)); return b ? aggValue(b, agg, measure) : 0; };
+
+  // Row/col/grand aggregates. Sum/Count add up; Average is the weighted average over the group's
+  // bookings (Σtotal ÷ Σcount), not a mean-of-cells, so totals stay meaningful.
+  const groupAgg = (cells: RevenuePivotCell[]): number => {
+    if (agg === "count") return cells.reduce((s, b) => s + b.expectedCount, 0);
+    const total = cells.reduce((s, b) => s + measureExpected(b, measure), 0);
+    if (agg === "sum") return total;
+    const n = cells.reduce((s, b) => s + b.expectedCount, 0);
+    return n ? total / n : 0;
+  };
+  const cellsByRow = new Map<string, RevenuePivotCell[]>();
+  const cellsByCol = new Map<string, RevenuePivotCell[]>();
+  const allCells = pivot?.cells ?? [];
+  for (const c of allCells) {
+    (cellsByRow.get(c.row) ?? cellsByRow.set(c.row, []).get(c.row)!).push(c);
+    (cellsByCol.get(c.col) ?? cellsByCol.set(c.col, []).get(c.col)!).push(c);
   }
-  const cell = (v: number) => v ? fmtMeasure(v, measure) : <span className="text-slate-300">—</span>;
+  const rowTot = (r: string) => groupAgg(cellsByRow.get(r) ?? []);
+  const colTot = (c: string) => groupAgg(cellsByCol.get(c) ?? []);
+  const grand = groupAgg(allCells);
+
+  // Heatmap range + min/max markers over the non-empty body cells only.
+  const bodyValues: { key: string; v: number }[] = [];
+  if (pivot) for (const r of pivot.rowKeys) for (const c of pivot.colKeys) {
+    const b = bucketMap.get(pivotKey(r, c));
+    if (b) bodyValues.push({ key: pivotKey(r, c), v: aggValue(b, agg, measure) });
+  }
+  const min = bodyValues.length ? Math.min(...bodyValues.map((x) => x.v)) : 0;
+  const max = bodyValues.length ? Math.max(...bodyValues.map((x) => x.v)) : 0;
+  const minKey = bodyValues.find((x) => x.v === min)?.key;
+  const maxKey = bodyValues.find((x) => x.v === max)?.key;
+  // Tint: 0 (min) → 0.14 (max) alpha of brand indigo. Distinct min/max get a ring instead.
+  const tint = (v: number) => max === min ? "transparent" : `rgba(79,70,229,${(0.02 + 0.16 * (v - min) / (max - min)).toFixed(3)})`;
+
+  const empty = <span className="text-slate-300">—</span>;
+
   return (
     <div className="card p-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <h3 className="font-extrabold text-ink">Pivot — {measure === "revenue" ? "revenue" : "booking count"}</h3>
+        <div>
+          <h3 className="font-extrabold text-ink">Pivot</h3>
+          <p className="mt-0.5 text-xs text-slate-500">{PIVOT_AGG_LABELS[agg]} of {measure === "revenue" ? "revenue" : "bookings"} · heatmap-shaded, min/max marked</p>
+        </div>
         <div className="flex flex-wrap items-end gap-3">
           <Field label="Rows">
             <select className="field" value={row} onChange={(e) => onRow(e.target.value as RevenueDimension)}>
@@ -3809,32 +3893,57 @@ function PivotTable({ report, measure, row, col, onRow, onCol }: {
               {dims.filter((d) => d !== row).map((d) => <option key={d} value={d}>{DIMENSION_LABELS[d]}</option>)}
             </select>
           </Field>
+          <Field label="Aggregate">
+            <select className="field" value={agg} onChange={(e) => setAgg(e.target.value as PivotAgg)}>
+              {availableAggs.map((a) => <option key={a} value={a}>{PIVOT_AGG_LABELS[a]}</option>)}
+            </select>
+          </Field>
+          <button type="button" className="secondary-button min-h-10 px-3 py-2 text-xs" disabled={!pivot || !pivot.rowKeys.length}
+            title="Export just this pivot matrix as CSV"
+            onClick={() => pivot && downloadPivotCsv(pivot, agg, measure, cellVal, rowTot, colTot, grand)}>
+            <Download size={15} /> Export pivot
+          </button>
         </div>
       </div>
       {!pivot || !pivot.rowKeys.length || !pivot.colKeys.length ? (
         <p className="mt-6 text-center text-sm text-slate-400">No data for this combination in range.</p>
       ) : (
         <div className="mt-4 overflow-auto">
-          <table className="min-w-full text-left text-sm">
+          <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
             <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
               <tr>
-                <th className="sticky left-0 bg-white py-2 pr-3">{DIMENSION_LABELS[pivot.row]} \ {DIMENSION_LABELS[pivot.col]}</th>
+                <th className="sticky left-0 z-10 bg-white py-2 pr-3">{DIMENSION_LABELS[pivot.row]} \ {DIMENSION_LABELS[pivot.col]}</th>
                 {pivot.colKeys.map((c) => <th key={c} className="whitespace-nowrap px-3 py-2 text-right">{c}</th>)}
                 <th className="px-3 py-2 text-right text-ink">Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
+            <tbody>
               {pivot.rowKeys.map((r) => (
-                <tr key={r} className="hover:bg-slate-50">
-                  <td className="sticky left-0 bg-white py-2 pr-3 font-semibold text-ink">{r}</td>
-                  {pivot.colKeys.map((c) => <td key={c} className="px-3 py-2 text-right text-slate-600">{cell(cellMap.get(pivotKey(r, c)) ?? 0)}</td>)}
-                  <td className="px-3 py-2 text-right font-bold text-ink">{cell(rowTotals.get(r) ?? 0)}</td>
+                <tr key={r} className="group">
+                  <td className="sticky left-0 z-10 bg-white py-2 pr-3 font-semibold text-ink group-hover:bg-slate-50">{r}</td>
+                  {pivot.colKeys.map((c) => {
+                    const key = pivotKey(r, c);
+                    const b = bucketMap.get(key);
+                    const v = b ? aggValue(b, agg, measure) : 0;
+                    const isMax = key === maxKey && bodyValues.length > 1;
+                    const isMin = key === minKey && bodyValues.length > 1 && minKey !== maxKey;
+                    return (
+                      <td key={c} className="relative px-3 py-2 text-right tabular-nums text-slate-700" style={{ backgroundColor: b ? tint(v) : "transparent" }}>
+                        <span className={clsx(isMax && "font-extrabold text-emerald-700", isMin && "font-semibold text-amber-700")}>
+                          {b ? fmtAgg(v, agg, measure) : empty}
+                        </span>
+                        {isMax && <span className="ml-1 rounded bg-emerald-100 px-1 text-[9px] font-bold uppercase text-emerald-700">max</span>}
+                        {isMin && <span className="ml-1 rounded bg-amber-100 px-1 text-[9px] font-bold uppercase text-amber-700">min</span>}
+                      </td>
+                    );
+                  })}
+                  <td className="px-3 py-2 text-right font-bold tabular-nums text-ink">{fmtAgg(rowTot(r), agg, measure)}</td>
                 </tr>
               ))}
-              <tr className="border-t-2 border-slate-200 bg-slate-50">
-                <td className="sticky left-0 bg-slate-50 py-2 pr-3 font-bold uppercase tracking-wider text-slate-400">Total</td>
-                {pivot.colKeys.map((c) => <td key={c} className="px-3 py-2 text-right font-bold text-ink">{cell(colTotals.get(c) ?? 0)}</td>)}
-                <td className="px-3 py-2 text-right font-extrabold text-brand-700">{cell(grand)}</td>
+              <tr className="bg-slate-50">
+                <td className="sticky left-0 z-10 border-t-2 border-slate-200 bg-slate-50 py-2 pr-3 font-bold uppercase tracking-wider text-slate-400">Total</td>
+                {pivot.colKeys.map((c) => <td key={c} className="border-t-2 border-slate-200 px-3 py-2 text-right font-bold tabular-nums text-ink">{fmtAgg(colTot(c), agg, measure)}</td>)}
+                <td className="border-t-2 border-slate-200 px-3 py-2 text-right font-extrabold tabular-nums text-brand-700">{fmtAgg(grand, agg, measure)}</td>
               </tr>
             </tbody>
           </table>
