@@ -49,6 +49,7 @@ export interface DbService {
   slot_interval_minutes: number;
   price_display: string | null;
   price_tax_mode: string;
+  price_cents: number | null;
   enabled: number;
   request_only: number;
   cutoff_hours: number;

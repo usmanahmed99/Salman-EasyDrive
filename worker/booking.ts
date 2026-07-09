@@ -17,6 +17,8 @@ interface TemplateFields {
   dateTime: string;
   manageUrl: string;
   visibleFields: string;
+  /** For package sessions: the package's name; empty for standalone bookings. */
+  packageName: string;
   /** For package sessions: the full list of sessions in the package; empty for standalone bookings. */
   packageSchedule: string;
   /** For package sessions: "Lesson 3 of 6" for this session's position; empty for standalone bookings. */
@@ -214,13 +216,19 @@ export async function prepareSession(
   const studentEmail = String(payload.answers.email || "");
   const studentPhone = String(payload.answers.phone || "");
 
+  // Revenue snapshot: a standalone booking captures its service's numeric price. A package session
+  // leaves this NULL here — the full package amount is attributed to a single session (the earliest)
+  // by confirmPackageBooking after all sessions are reserved, so package revenue isn't double-counted.
+  const priceCents = options.packageBookingId ? null : context.service.price_cents ?? null;
+
   const statements: D1PreparedStatement[] = [
     env.DB.prepare(`
       INSERT INTO bookings(
         id, reference, center_id, service_id, start_at, end_at, operational_start_at,
         operational_end_at, timezone, language, status, form_version,
-        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, package_booking_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, package_booking_id,
+        price_cents
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
     `).bind(
       id,
       reference,
@@ -237,7 +245,8 @@ export async function prepareSession(
       JSON.stringify(form),
       tokenHash,
       publicToken,
-      options.packageBookingId ?? null
+      options.packageBookingId ?? null,
+      priceCents
     ),
     env.DB.prepare(`
       INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
@@ -372,12 +381,12 @@ export async function confirmAdminBooking(env: Env, payload: AdminBookingPayload
       INSERT INTO bookings(
         id, reference, center_id, service_id, start_at, end_at, operational_start_at,
         operational_end_at, timezone, language, status, form_version,
-        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending')
+        form_schema_snapshot, public_token_hash, manage_token, calendar_sync_status, price_cents
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', ?, ?, ?, ?, 'pending', ?)
     `).bind(
       id, reference, context.center.id, context.service.id, payload.start, end,
       operationalStart, operationalEnd, context.center.timezone, payload.language,
-      form.version, JSON.stringify(form), tokenHash, publicToken
+      form.version, JSON.stringify(form), tokenHash, publicToken, context.service.price_cents ?? null
     ),
     env.DB.prepare(`
       INSERT INTO booking_form_responses(booking_id, response_json, student_name, student_email, student_phone)
@@ -532,11 +541,14 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
       services.description_en, services.description_fr, services.price_display,
       services.price_tax_mode, services.show_duration, services.duration_minutes,
       booking_form_responses.response_json, booking_form_responses.student_name,
-      booking_form_responses.student_email
+      booking_form_responses.student_email,
+      packages.name_en AS package_name_en, packages.name_fr AS package_name_fr
     FROM bookings
     JOIN centers ON centers.id = bookings.center_id
     JOIN services ON services.id = bookings.service_id
     LEFT JOIN booking_form_responses ON booking_form_responses.booking_id = bookings.id
+    LEFT JOIN package_bookings ON package_bookings.id = bookings.package_booking_id
+    LEFT JOIN packages ON packages.id = package_bookings.package_id
     WHERE bookings.id = ?
   `).bind(bookingId).first<Record<string, string>>();
   if (!booking) throw new HttpError(404, "Booking not found.");
@@ -586,6 +598,9 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
   // and state this session's position ("Lesson 3 of 6") so it's clear at a glance which lesson it is.
   let packageSchedule = "";
   let packageProgress = "";
+  const packageName = booking.package_booking_id
+    ? (isFr ? (booking.package_name_fr || booking.package_name_en || "") : (booking.package_name_en || ""))
+    : "";
   if (booking.package_booking_id) {
     const siblings = (await env.DB.prepare(`
       SELECT bookings.id, bookings.start_at, services.name_en, services.name_fr
@@ -620,6 +635,7 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     dateTime: formatBookingDateTime(booking.start_at, booking.timezone, isFr),
     manageUrl,
     visibleFields: (isFr ? visibleAnswersFr : visibleAnswers).join("\n"),
+    packageName,
     packageSchedule,
     packageProgress
   };
@@ -633,7 +649,9 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
     fields.dateTime ? `Date & time: ${fields.dateTime}` : "",
     fields.duration ? `Duration: ${fields.duration}` : "",
     fields.price ? `Price: ${fields.price}` : "",
-    fields.packageProgress ? `Package: ${fields.packageProgress}` : "",
+    fields.packageName || fields.packageProgress
+      ? `Package: ${[fields.packageName, fields.packageProgress].filter(Boolean).join(" — ")}`
+      : "",
     `Center: ${fields.center}`,
     fields.visibleFields,
     fields.packageSchedule ? `\n${fields.packageSchedule}` : "",
@@ -694,7 +712,8 @@ export async function syncBookingCalendar(env: Env, bookingId: string, knownPubl
         ["Student", fields.student],
         ["Date & time", fields.dateTime],
         ["Duration", fields.duration],
-        ["Price", fields.price]
+        ["Price", fields.price],
+        ["Package", [fields.packageName, fields.packageProgress].filter(Boolean).join(" — ")]
       ]
         .filter(([, value]) => value)
         .map(([label, value]) => `<tr><td style="padding:4px 12px 4px 0;color:#6b6461;white-space:nowrap"><b>${label}</b></td><td style="padding:4px 0">${escapeEmailValue(value)}</td></tr>`)
@@ -1004,6 +1023,7 @@ export function serviceResponse(service: {
   highlight_fr?: string;
   sort_order?: number;
   price_tax_mode?: string;
+  price_cents?: number | null;
 }) {
   return {
     id: service.id,
@@ -1016,6 +1036,7 @@ export function serviceResponse(service: {
     slotIntervalMinutes: service.slot_interval_minutes ?? 30,
     priceDisplay: service.price_display || undefined,
     priceTaxMode: (service.price_tax_mode === "incl" || service.price_tax_mode === "plus") ? service.price_tax_mode : "none",
+    priceCents: service.price_cents ?? undefined,
     enabled: Boolean(service.enabled),
     requestOnly: Boolean(service.request_only),
     formId: service.form_id,

@@ -2,7 +2,7 @@ import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, b
 import type { BookingForm } from "../shared/types";
 import { validateBookingForm } from "../shared/types";
 import { getSlots } from "./availability";
-import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireUser } from "./auth";
+import { devLoginAvailable, getSessionUser, handleDevLogin, handleGoogleCallback, handleGoogleStart, logout, requireRole, requireUser } from "./auth";
 import { cancelBookingCalendar, confirmAdminBooking, confirmBooking, rescheduleAdminBooking, sendBookingLifecycleEmail, serviceResponse, syncBookingCalendar, type AdminBookingPayload, type ConfirmBookingPayload } from "./booking";
 import { confirmPackageBooking, packageResponse, reserveSession, type PackageBookingPayload } from "./package";
 import { createCalendar, deleteCalendar, listCalendars, shareCalendar } from "./google";
@@ -68,6 +68,18 @@ function parseId(path: string, prefix: string) {
   return rest || null;
 }
 
+/**
+ * Parse an admin-entered numeric price (in dollars, e.g. 45 or 45.50) into integer cents for the
+ * price_cents columns that drive revenue analytics. Blank/absent/invalid → null (no numeric price,
+ * surfaced in the revenue UI as "missing price"). Negative values are clamped away to null.
+ */
+function parsePriceCents(raw: unknown): number | null {
+  if (raw == null || raw === "") return null;
+  const dollars = typeof raw === "number" ? raw : Number(String(raw).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(dollars) || dollars < 0) return null;
+  return Math.round(dollars * 100);
+}
+
 async function publicBookingByToken(request: Request, env: Env, reference: string) {
   const token = new URL(request.url).searchParams.get("token") || "";
   const tokenHash = await sha256(token);
@@ -80,6 +92,154 @@ async function publicBookingByToken(request: Request, env: Env, reference: strin
   `).bind(reference, tokenHash).first<Record<string, string>>();
   if (!row) throw new HttpError(404, "This booking link is invalid or expired.", "invalid_booking_token");
   return row;
+}
+
+// Statuses that count toward revenue. "Expected" = booked pipeline that we still expect to earn;
+// "realized" = lessons actually delivered. cancelled_* and no_show never count.
+const REVENUE_EXPECTED_STATUSES = ["confirmed", "pending_confirmation", "completed", "calendar_sync_failed"];
+const REVENUE_REALIZED_STATUSES = ["completed"];
+const REVENUE_TZ = "America/Montreal";
+
+/**
+ * Revenue analytics. Fetches every priced booking whose Montreal-local start date falls in
+ * [from, to] and aggregates in JS (tz-correct bucketing is awkward in SQLite). Returns:
+ *  - series:   per-period expected/realized totals + counts (day | week | month granularity)
+ *  - byService/byPackage/byCenter/byInstructor/byWeekday: expected/realized breakdowns
+ *  - totals + a count of in-range bookings that have no numeric price (so the UI can warn)
+ * All money is integer CAD cents. Query params: from=YYYY-MM-DD, to=YYYY-MM-DD, granularity.
+ */
+async function revenueReport(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const today = dateInTimeZone(new Date().toISOString(), REVENUE_TZ);
+  const from = (params.get("from") || "").match(/^\d{4}-\d{2}-\d{2}$/) ? params.get("from")! : today;
+  const to = (params.get("to") || "").match(/^\d{4}-\d{2}-\d{2}$/) ? params.get("to")! : today;
+  const granularity = (["day", "week", "month"].includes(params.get("granularity") || "") ? params.get("granularity") : "day") as "day" | "week" | "month";
+
+  // Pull a generous window (± a day of UTC slop vs the Montreal offset) then filter precisely by
+  // Montreal-local date in JS. A local day can straddle the UTC boundary either side, so widen both.
+  const shiftDays = (localDate: string, delta: number) => {
+    const [y, m, d] = localDate.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d + delta));
+    return dt.toISOString().slice(0, 10);
+  };
+  const sqlFrom = shiftDays(from, -1);
+  const sqlTo = shiftDays(to, 1);
+  const rows = await env.DB.prepare(`
+    SELECT bookings.id, bookings.start_at, bookings.status, bookings.price_cents,
+      services.name_en AS service, centers.name AS center,
+      package_bookings.reference AS package_reference, packages.name_en AS package_name,
+      (
+        SELECT group_concat(resources.name, ', ')
+        FROM booking_resource_allocations bra
+        JOIN resources ON resources.id = bra.resource_id
+        WHERE bra.booking_id = bookings.id AND resources.type = 'instructor'
+      ) AS instructor
+    FROM bookings
+    JOIN services ON services.id = bookings.service_id
+    JOIN centers ON centers.id = bookings.center_id
+    LEFT JOIN package_bookings ON package_bookings.id = bookings.package_booking_id
+    LEFT JOIN packages ON packages.id = package_bookings.package_id
+    WHERE bookings.start_at >= ? AND bookings.start_at <= ?
+      AND bookings.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+  `).bind(`${sqlFrom}T00:00:00Z`, `${sqlTo}T23:59:59Z`, ...REVENUE_EXPECTED_STATUSES)
+    .all<{
+      id: string; start_at: string; status: string; price_cents: number | null;
+      service: string; center: string; package_reference: string | null; package_name: string | null;
+      instructor: string | null;
+    }>();
+
+  const expectedSet = new Set(REVENUE_EXPECTED_STATUSES);
+  const realizedSet = new Set(REVENUE_REALIZED_STATUSES);
+  const weekdayFmt = new Intl.DateTimeFormat("en-CA", { weekday: "long", timeZone: REVENUE_TZ });
+
+  // ISO week start (Monday) for a YYYY-MM-DD local date, returned as YYYY-MM-DD.
+  const weekStart = (localDate: string) => {
+    const [y, m, d] = localDate.split("-").map(Number);
+    const dt = new Date(Date.UTC(y, m - 1, d));
+    const dow = (dt.getUTCDay() + 6) % 7; // 0 = Monday
+    dt.setUTCDate(dt.getUTCDate() - dow);
+    return dt.toISOString().slice(0, 10);
+  };
+  const periodKey = (localDate: string) =>
+    granularity === "month" ? localDate.slice(0, 7)
+    : granularity === "week" ? weekStart(localDate)
+    : localDate;
+
+  type Bucket = { expected: number; realized: number; expectedCount: number; realizedCount: number };
+  const empty = (): Bucket => ({ expected: 0, realized: 0, expectedCount: 0, realizedCount: 0 });
+  const series = new Map<string, Bucket>();
+  const byService = new Map<string, Bucket>();
+  const byPackage = new Map<string, Bucket>();
+  const byCenter = new Map<string, Bucket>();
+  const byInstructor = new Map<string, Bucket>();
+  const byWeekday = new Map<string, Bucket>();
+  const totals = empty();
+  let missingPriceCount = 0;
+
+  const add = (map: Map<string, Bucket>, key: string, cents: number, realized: boolean) => {
+    const b = map.get(key) ?? empty();
+    b.expected += cents;
+    b.expectedCount += 1;
+    if (realized) { b.realized += cents; b.realizedCount += 1; }
+    map.set(key, b);
+  };
+
+  for (const row of rows.results) {
+    const localDate = dateInTimeZone(row.start_at, REVENUE_TZ);
+    if (localDate < from || localDate > to) continue; // precise Montreal-local range filter
+    if (!expectedSet.has(row.status)) continue;
+    const cents = row.price_cents ?? 0;
+    if (row.price_cents == null) { missingPriceCount += 1; continue; } // no numeric price → excluded from sums
+    const realized = realizedSet.has(row.status);
+
+    totals.expected += cents; totals.expectedCount += 1;
+    if (realized) { totals.realized += cents; totals.realizedCount += 1; }
+
+    add(series, periodKey(localDate), cents, realized);
+    add(byService, row.service, cents, realized);
+    add(byCenter, row.center, cents, realized);
+    add(byInstructor, row.instructor || "Unassigned", cents, realized);
+    add(byWeekday, weekdayFmt.format(new Date(row.start_at)), cents, realized);
+    if (row.package_name) add(byPackage, row.package_name, cents, realized);
+  }
+
+  const toSortedArray = (map: Map<string, Bucket>, sortByKey = false) =>
+    [...map.entries()]
+      .map(([key, b]) => ({ key, ...b }))
+      .sort((a, b) => sortByKey ? a.key.localeCompare(b.key) : b.expected - a.expected);
+
+  // Build a gap-free series: enumerate EVERY period key from `from` to `to` and zero-fill the ones
+  // with no bookings, so the chart's x-axis has uniform intervals (no collapsed/uneven spacing on
+  // quiet days). Step by day/week(Monday)/month depending on granularity.
+  const enumeratePeriods = (): string[] => {
+    const keys: string[] = [];
+    const seen = new Set<string>();
+    let cursor = granularity === "week" ? weekStart(from) : from;
+    const push = (localDate: string) => { const k = periodKey(localDate); if (!seen.has(k)) { seen.add(k); keys.push(k); } };
+    const step = granularity === "week" ? 7 : 1;
+    // Iterate day-by-day (or week-by-week) until we pass `to`; month keys dedupe via `seen`.
+    let guard = 0;
+    while (cursor <= to && guard++ < 4000) {
+      push(cursor);
+      const [y, m, d] = cursor.split("-").map(Number);
+      const next = new Date(Date.UTC(y, m - 1, d + step));
+      cursor = next.toISOString().slice(0, 10);
+    }
+    return keys;
+  };
+  const fullSeries = enumeratePeriods().map((key) => ({ key, ...(series.get(key) ?? empty()) }));
+
+  return json({
+    from, to, granularity, currency: "CAD",
+    totals,
+    missingPriceCount,
+    series: fullSeries,
+    byService: toSortedArray(byService),
+    byPackage: toSortedArray(byPackage),
+    byCenter: toSortedArray(byCenter),
+    byInstructor: toSortedArray(byInstructor),
+    byWeekday: toSortedArray(byWeekday)
+  });
 }
 
 async function adminCrud(request: Request, env: Env, path: string, user: Awaited<ReturnType<typeof requireUser>>) {
@@ -250,6 +410,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       slotInterval: Number(body.slotIntervalMinutes || 30),
       price: body.priceDisplay ? String(body.priceDisplay) : null,
       priceTaxMode: (body.priceTaxMode === "incl" || body.priceTaxMode === "plus") ? body.priceTaxMode : "none",
+      priceCents: parsePriceCents(body.priceCents),
       formId: String(body.formId || "form_lesson"),
       cutoff: Number(body.cutoffHours || 0),
       cancellationCutoff: body.cancellationCutoffHours == null ? null : Number(body.cancellationCutoffHours),
@@ -268,10 +429,10 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare(`
         INSERT INTO services(
           id, slug, name_en, name_fr, description_en, description_fr, duration_minutes,
-          buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display, price_tax_mode,
+          buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, price_display, price_tax_mode, price_cents,
           form_id, cutoff_hours, cancellation_cutoff_hours, base_concurrency, enabled, show_duration, highlight_en, highlight_fr, sort_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, nextSortOrder).run();
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.priceCents, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, nextSortOrder).run();
       // Offer the new service at every existing center by default (mirrors center creation).
       const allCenters = await env.DB.prepare("SELECT id FROM centers WHERE deleted_at IS NULL AND enabled=1").all<{ id: string }>();
       for (const ctr of allCenters.results) {
@@ -285,10 +446,10 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       await env.DB.prepare(`
         UPDATE services SET name_en=?, name_fr=?, description_en=?, description_fr=?,
         duration_minutes=?, buffer_before_minutes=?, buffer_after_minutes=?, slot_interval_minutes=?,
-        price_display=?, price_tax_mode=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
+        price_display=?, price_tax_mode=?, price_cents=?, form_id=?, cutoff_hours=?, cancellation_cutoff_hours=?, base_concurrency=?, enabled=?, show_duration=?,
         highlight_en=?, highlight_fr=?,
         updated_at=CURRENT_TIMESTAMP WHERE id=?
-      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, id).run();
+      `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.duration, values.bufferBefore, values.bufferAfter, values.slotInterval, values.price, values.priceTaxMode, values.priceCents, values.formId, values.cutoff, values.cancellationCutoff, values.concurrency, values.enabled, values.showDuration, values.highlightEn, values.highlightFr, id).run();
       await audit(env, user.id, "update", "service", id, body, request);
       return json({ id });
     }
@@ -348,6 +509,7 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       descriptionFr: String(body.descriptionFr || ""),
       price: body.priceDisplay ? String(body.priceDisplay) : null,
       priceTaxMode: (body.priceTaxMode === "incl" || body.priceTaxMode === "plus") ? body.priceTaxMode : "none",
+      priceCents: parsePriceCents(body.priceCents),
       enabled: body.enabled === false ? 0 : 1
     };
     // Items: [{ serviceId, quantity, prerequisiteServiceId?, prerequisiteAnchor? }]. Replaced
@@ -378,9 +540,9 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       const maxRow = await env.DB.prepare("SELECT COALESCE(MAX(sort_order), -1) AS max FROM packages WHERE deleted_at IS NULL").first<{ max: number }>();
       const statements = [
         env.DB.prepare(`
-          INSERT INTO packages(id, slug, name_en, name_fr, description_en, description_fr, price_display, price_tax_mode, enabled, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.enabled, (maxRow?.max ?? -1) + 1),
+          INSERT INTO packages(id, slug, name_en, name_fr, description_en, description_fr, price_display, price_tax_mode, price_cents, enabled, sort_order)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(nextId, values.slug, values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.priceCents, values.enabled, (maxRow?.max ?? -1) + 1),
         ...items.map((item, index) => env.DB.prepare(
           "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order, prerequisite_service_id, prerequisite_anchor) VALUES (?, ?, ?, ?, ?, ?, ?)"
         ).bind(uuid(), nextId, item.serviceId, item.quantity, index, item.prerequisiteServiceId, item.prerequisiteAnchor))
@@ -400,8 +562,8 @@ async function adminCrud(request: Request, env: Env, path: string, user: Awaited
       const statements = [
         env.DB.prepare(`
           UPDATE packages SET name_en=?, name_fr=?, description_en=?, description_fr=?,
-          price_display=?, price_tax_mode=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
-        `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.enabled, id),
+          price_display=?, price_tax_mode=?, price_cents=?, enabled=?, updated_at=CURRENT_TIMESTAMP WHERE id=?
+        `).bind(values.nameEn, values.nameFr, values.descriptionEn, values.descriptionFr, values.price, values.priceTaxMode, values.priceCents, values.enabled, id),
         env.DB.prepare("DELETE FROM package_items WHERE package_id=?").bind(id),
         ...items.map((item, index) => env.DB.prepare(
           "INSERT INTO package_items(id, package_id, service_id, quantity, sort_order, prerequisite_service_id, prerequisite_anchor) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -779,6 +941,8 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
           services.name_en AS service, services.slug AS service_slug,
           centers.name AS center, centers.slug AS center_slug,
           COALESCE(booking_form_responses.student_name, 'Private') AS student,
+          booking_form_responses.student_phone AS phone,
+          booking_form_responses.student_email AS email,
           (
             SELECT group_concat(resources.name, ', ')
             FROM booking_resource_allocations bra
@@ -806,6 +970,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         time: safe(fmt, booking.start_at),
         date: safe(dateFmt, booking.start_at),
         booked_at: safe(bookedFmt, booking.created_at),
+        // Nulled by the retention/anonymization job; coalesce so the frontend renders "—" not "null".
+        phone: booking.phone || "",
+        email: booking.email || "",
         package_booking_id: booking.package_booking_id || "",
         package_reference: booking.package_reference || "",
         package_name: booking.package_name || "",
@@ -814,6 +981,11 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
         package_position: Number(booking.package_position) || 0,
         package_total: Number(booking.package_total) || 0,
       })) });
+    }
+    if (path === "/api/admin/revenue" && method === "GET") {
+      // Revenue analytics is sensitive → owner/admin only (staff is excluded).
+      requireRole(user, ["owner", "admin"]);
+      return revenueReport(request, env);
     }
     if (path === "/api/admin/overrides" && method === "GET") {
       const results = await env.DB.prepare(`

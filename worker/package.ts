@@ -15,6 +15,7 @@ interface DbPackageRow {
   description_fr: string;
   price_display: string | null;
   price_tax_mode: string;
+  price_cents: number | null;
   enabled: number;
   sort_order: number;
 }
@@ -59,6 +60,7 @@ export function packageResponse(row: DbPackageRow, items: DbPackageItemRow[]): P
     description: { en: row.description_en, fr: row.description_fr },
     priceDisplay: row.price_display || undefined,
     priceTaxMode: (row.price_tax_mode === "incl" || row.price_tax_mode === "plus") ? row.price_tax_mode : "none",
+    priceCents: row.price_cents ?? undefined,
     enabled: Boolean(row.enabled),
     sortOrder: row.sort_order,
     items: mapped,
@@ -331,6 +333,18 @@ export async function confirmPackageBooking(env: Env, payload: PackageBookingPay
       manageToken: session.publicToken,
       calendarSyncStatus: sync.status
     });
+  }
+
+  // Revenue snapshot: attribute the WHOLE package price to a single session — the earliest by start —
+  // so package revenue lands on one day and isn't spread or double-counted across sessions. The other
+  // sessions keep price_cents NULL (set so in prepareSession for package sessions). NULL package price
+  // (admin hasn't entered a numeric amount) leaves every session NULL → surfaced as "missing price".
+  const priceRow = await env.DB.prepare("SELECT price_cents FROM packages WHERE id=?")
+    .bind(pkg.id).first<{ price_cents: number | null }>();
+  if (priceRow?.price_cents != null && reserved.length) {
+    const earliest = reserved.reduce((min, s) => (s.start < min.start ? s : min), reserved[0]);
+    await env.DB.prepare("UPDATE bookings SET price_cents=? WHERE id=?")
+      .bind(priceRow.price_cents, earliest.id).run();
   }
 
   return {

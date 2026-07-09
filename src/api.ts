@@ -14,6 +14,7 @@ import type {
   ResourceGroup,
   RetentionJob,
   RetentionSettings,
+  RevenueReport,
   Service,
   Slot
 } from "../shared/types";
@@ -162,6 +163,10 @@ export const adminApi = {
 
   me: () => request<{ user: AdminUser }>("/api/admin/me"),
   bookings: () => request<{ bookings: Array<Record<string, string>> }>("/api/admin/bookings"),
+
+  // Revenue analytics (owner/admin only). from/to are YYYY-MM-DD (Montreal-local).
+  revenue: (params: { from: string; to: string; granularity: "day" | "week" | "month" }) =>
+    request<RevenueReport>(`/api/admin/revenue?from=${params.from}&to=${params.to}&granularity=${params.granularity}`),
 
   // Overrides
   overrides: () => request<{ overrides: Array<Record<string, string>> }>("/api/admin/overrides"),

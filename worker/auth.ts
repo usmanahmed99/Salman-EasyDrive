@@ -24,6 +24,16 @@ export async function requireUser(request: Request, env: Env) {
   return user;
 }
 
+/**
+ * Require the signed-in user to hold one of the given roles. Used to gate sensitive endpoints
+ * (e.g. revenue analytics is owner/admin-only) — the first per-role check in the codebase.
+ */
+export function requireRole(user: SessionUser, roles: SessionUser["role"][]) {
+  if (!roles.includes(user.role)) {
+    throw new HttpError(403, "You do not have access to this.", "forbidden");
+  }
+}
+
 const LOGIN_SCOPES = ["openid", "email", "profile"];
 const CALENDAR_SCOPES = [
   "openid",
