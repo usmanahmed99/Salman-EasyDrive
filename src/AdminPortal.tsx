@@ -3605,7 +3605,7 @@ function downloadRevenueCsv(report: RevenueReport) {
   ];
   if (report.pivot) {
     const p = report.pivot;
-    lines.push(...p.cells.map((c) => [`pivot_${p.row}_x_${p.col}`, c.row, c.col, money(c.expected), money(c.realized), c.expectedCount, c.realizedCount]));
+    lines.push(...p.cells.map((c) => [`comparison_${p.row}_by_${p.col}`, c.row, c.col, money(c.expected), money(c.realized), c.expectedCount, c.realizedCount]));
   }
   const csv = lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
   // Prepend a UTF-8 BOM so Excel opens accented names correctly.
@@ -3770,6 +3770,13 @@ const pivotKey = (row: string, col: string) => `${row}␟${col}`;
 type PivotAgg = "sum" | "avg" | "count";
 const PIVOT_AGG_LABELS: Record<PivotAgg, string> = { sum: "Sum", avg: "Average", count: "Count" };
 
+/** Plain-language summary of what the comparison table is showing, for the card subtitle. */
+function pivotSummary(agg: PivotAgg, measure: Measure): string {
+  if (agg === "count") return "Number of bookings";
+  if (measure === "count") return "Total bookings";
+  return agg === "avg" ? "Average revenue per booking" : "Total revenue";
+}
+
 /** Aggregate a bucket into a single number for the chosen aggregation + measure. */
 function aggValue(b: { expected: number; realized: number; expectedCount: number; realizedCount: number }, agg: PivotAgg, measure: Measure): number {
   if (agg === "count") return b.expectedCount;
@@ -3806,7 +3813,7 @@ function downloadPivotCsv(pivot: RevenuePivot, agg: PivotAgg, measure: Measure, 
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `pivot_${pivot.row}_x_${pivot.col}_${agg}_${measure}.csv`;
+  a.download = `comparison_${pivot.row}_by_${pivot.col}_${agg}_${measure}.csv`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -3879,8 +3886,10 @@ function PivotTable({ report, measure, row, col, onRow, onCol }: {
     <div className="card p-5">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h3 className="font-extrabold text-ink">Pivot</h3>
-          <p className="mt-0.5 text-xs text-slate-500">{PIVOT_AGG_LABELS[agg]} of {measure === "revenue" ? "revenue" : "bookings"} · heatmap-shaded, min/max marked</p>
+          <h3 className="font-extrabold text-ink">Compare two dimensions</h3>
+          <p className="mt-0.5 text-xs text-slate-500">
+            {pivotSummary(agg, measure)} by {DIMENSION_LABELS[row].toLowerCase()} and {DIMENSION_LABELS[col].toLowerCase()}
+          </p>
         </div>
         <div className="flex flex-wrap items-end gap-3">
           <Field label="Rows">
@@ -3899,9 +3908,9 @@ function PivotTable({ report, measure, row, col, onRow, onCol }: {
             </select>
           </Field>
           <button type="button" className="secondary-button min-h-10 px-3 py-2 text-xs" disabled={!pivot || !pivot.rowKeys.length}
-            title="Export just this pivot matrix as CSV"
+            title="Export just this table as CSV"
             onClick={() => pivot && downloadPivotCsv(pivot, agg, measure, cellVal, rowTot, colTot, grand)}>
-            <Download size={15} /> Export pivot
+            <Download size={15} /> Export table
           </button>
         </div>
       </div>
