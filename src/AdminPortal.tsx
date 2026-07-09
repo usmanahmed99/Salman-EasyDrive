@@ -3607,17 +3607,52 @@ function downloadRevenueCsv(report: RevenueReport) {
     const p = report.pivot;
     lines.push(...p.cells.map((c) => [`comparison_${p.row}_by_${p.col}`, c.row, c.col, money(c.expected), money(c.realized), c.expectedCount, c.realizedCount]));
   }
-  const csv = lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
-  // Prepend a UTF-8 BOM so Excel opens accented names correctly.
+  saveCsv(`analysis_${report.from}_to_${report.to}_by_${report.granularity}.csv`, lines);
+}
+
+/** Turn a grid of rows into a downloaded CSV file (UTF-8 BOM so Excel handles accents). */
+function saveCsv(filename: string, rows: (string | number)[][]) {
+  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\r\n");
   const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `analysis_${report.from}_to_${report.to}_by_${report.granularity}.csv`;
+  a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+/** slugify a card title into a filename-safe token (e.g. "By service" -> "by-service"). */
+const slugForFile = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+/**
+ * Export a single breakdown/seasonality card's buckets as CSV, with expected/realized in the card's
+ * own units (dollars for revenue, integer counts otherwise) plus both raw counts. `keyLabel` names
+ * the first column (e.g. "Service", "Day").
+ */
+function downloadBucketsCsv(name: string, keyLabel: string, buckets: RevenueBucket[], measure: Measure) {
+  const money = (cents: number) => (cents / 100).toFixed(2);
+  const isRev = measure === "revenue";
+  const header = isRev
+    ? [keyLabel, "expected_cad", "realized_cad", "expected_count", "realized_count"]
+    : [keyLabel, "expected_bookings", "completed_bookings"];
+  const rows: (string | number)[][] = [header, ...buckets.map((b) => isRev
+    ? [b.key, money(b.expected), money(b.realized), b.expectedCount, b.realizedCount]
+    : [b.key, b.expectedCount, b.realizedCount])];
+  saveCsv(`${slugForFile(name)}_${measure}.csv`, rows);
+}
+
+/** Small "Export" button used on each analysis card. */
+function CardExport({ onClick, disabled }: { onClick: () => void; disabled?: boolean }) {
+  return (
+    <button type="button" onClick={onClick} disabled={disabled}
+      title="Export this card as CSV"
+      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50 disabled:opacity-40">
+      <Download size={13} /> Export
+    </button>
+  );
 }
 
 function KpiCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent: string }) {
@@ -3661,7 +3696,12 @@ function BreakdownCard({ title, data, empty, measure }: { title: string; data: R
     <div className="card p-5">
       <div className="flex items-center justify-between gap-2">
         <h3 className="font-extrabold text-ink">{title}</h3>
-        {data.length > 0 && <ViewToggle view={view} onChange={setView} />}
+        {data.length > 0 && (
+          <div className="flex items-center gap-2">
+            <ViewToggle view={view} onChange={setView} />
+            <CardExport onClick={() => downloadBucketsCsv(title, title.replace(/^By /, ""), data, measure)} />
+          </div>
+        )}
       </div>
       {!data.length ? (
         <p className="mt-6 text-center text-sm text-slate-400">{empty}</p>
@@ -3725,7 +3765,10 @@ function SeasonalityCard({ report, measure }: { report: RevenueReport; measure: 
             ))}
           </div>
         </div>
-        <ViewToggle view={view} onChange={setView} />
+        <div className="flex items-center gap-2">
+          <ViewToggle view={view} onChange={setView} />
+          <CardExport disabled={!source.length} onClick={() => downloadBucketsCsv(dim === "weekday" ? "By day of week" : "By month", dim === "weekday" ? "Day" : "Month", source, measure)} />
+        </div>
       </div>
       {!source.length ? (
         <p className="mt-6 text-center text-sm text-slate-400">No bookings in range.</p>
@@ -3807,17 +3850,7 @@ function downloadPivotCsv(pivot: RevenuePivot, agg: PivotAgg, measure: Measure, 
   const header = [`${DIMENSION_LABELS[pivot.row]} \\ ${DIMENSION_LABELS[pivot.col]}`, ...pivot.colKeys, "Total"];
   const body = pivot.rowKeys.map((r) => [r, ...pivot.colKeys.map((c) => out(get(r, c))), out(rowTot(r))]);
   const totalRow = ["Total", ...pivot.colKeys.map((c) => out(colTot(c))), out(grand)];
-  const lines = [header, ...body, totalRow];
-  const csv = lines.map((row) => row.map(csvCell).join(",")).join("\r\n");
-  const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `comparison_${pivot.row}_by_${pivot.col}_${agg}_${measure}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  saveCsv(`comparison_${pivot.row}_by_${pivot.col}_${agg}_${measure}.csv`, [header, ...body, totalRow]);
 }
 
 /**
@@ -4092,9 +4125,12 @@ function AnalysisScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
 
           {/* Trend */}
           <div className="card p-5">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <h3 className="font-extrabold text-ink">{isRevenue ? "Revenue" : "Bookings"} over time</h3>
-              <span className="text-xs text-slate-400">{report.from} → {report.to} · by {granularity}</span>
+              <div className="flex items-center gap-3">
+                <span className="hidden text-xs text-slate-400 sm:inline">{report.from} → {report.to} · by {granularity}</span>
+                <CardExport onClick={() => downloadBucketsCsv(`${isRevenue ? "revenue" : "bookings"}-over-time-by-${granularity}`, granularity === "month" ? "Month" : granularity === "week" ? "Week starting" : "Date", report.series, measure)} />
+              </div>
             </div>
             <div className="mt-4 h-[320px] w-full">
               <ResponsiveContainer width="100%" height="100%">
