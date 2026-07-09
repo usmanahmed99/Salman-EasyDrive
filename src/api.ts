@@ -164,9 +164,14 @@ export const adminApi = {
   me: () => request<{ user: AdminUser }>("/api/admin/me"),
   bookings: () => request<{ bookings: Array<Record<string, string>> }>("/api/admin/bookings"),
 
-  // Revenue analytics (owner/admin only). from/to are YYYY-MM-DD (Montreal-local).
-  revenue: (params: { from: string; to: string; granularity: "day" | "week" | "month" }) =>
-    request<RevenueReport>(`/api/admin/revenue?from=${params.from}&to=${params.to}&granularity=${params.granularity}`),
+  // Analytics (owner/admin only). from/to are YYYY-MM-DD (Montreal-local). pivotRow/pivotCol are
+  // optional dimensions; when both are set (and distinct) the response includes a cross-tab.
+  revenue: (params: { from: string; to: string; granularity: "day" | "week" | "month"; pivotRow?: string; pivotCol?: string }) => {
+    const qs = new URLSearchParams({ from: params.from, to: params.to, granularity: params.granularity });
+    if (params.pivotRow) qs.set("pivotRow", params.pivotRow);
+    if (params.pivotCol) qs.set("pivotCol", params.pivotCol);
+    return request<RevenueReport>(`/api/admin/revenue?${qs.toString()}`);
+  },
 
   // Overrides
   overrides: () => request<{ overrides: Array<Record<string, string>> }>("/api/admin/overrides"),
