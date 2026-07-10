@@ -32,6 +32,19 @@ export const packageBookingRequestSchema = z.object({
   turnstileToken: z.string().optional()
 });
 
+// A manually-set dashboard performance goal. scopeId is required for service/center scopes and null
+// for 'overall'; periodMonth null = the recurring default for any month. targetValue is a count or
+// CAD cents depending on metric.
+export const targetMutationSchema = z.object({
+  scope: z.enum(["service", "center", "overall"]),
+  scopeId: z.string().min(1).max(80).nullable().optional(),
+  metric: z.enum(["count", "revenue"]),
+  periodMonth: z.string().regex(/^\d{4}-\d{2}$/).nullable().optional(),
+  targetValue: z.number().int().min(0)
+}).refine((v) => v.scope === "overall" ? !v.scopeId : !!v.scopeId, {
+  message: "scopeId is required for service/center targets and must be omitted for overall."
+});
+
 export const adminBookingSchema = z.object({
   centerSlug: z.string().min(1).max(80),
   serviceSlug: z.string().min(1).max(80),

@@ -324,3 +324,113 @@ export interface RevenuePivot {
   colKeys: string[];
   cells: RevenuePivotCell[];
 }
+
+/* -------------------------------------------------------------------------- */
+/* Executive dashboard (admin)                                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A manually-set performance goal. Keyed by (scope, scopeId, metric, periodMonth):
+ * scope 'service'|'center' targets one entity (scopeId = its id); 'overall' is the single monthly
+ * revenue goal driving the forecast (scopeId null). metric 'count' is a booking count, 'revenue' is
+ * CAD cents. periodMonth 'YYYY-MM' pins the goal to a month; null is the recurring default.
+ */
+export interface PerformanceTarget {
+  id: string;
+  scope: "service" | "center" | "overall";
+  scopeId: string | null;
+  metric: "count" | "revenue";
+  periodMonth: string | null;
+  targetValue: number;
+}
+
+/** One month-to-date KPI with its delta vs the same window of the previous month. */
+export interface DashboardKpi {
+  value: number;
+  /** Same value over the previous month's MTD window (1st → same day-count), for the vs-last-month delta. */
+  prevValue: number;
+  /** Signed fractional change vs prevValue (0.186 = +18.6%); null when prevValue is 0. */
+  deltaPct: number | null;
+}
+
+/** Per-centre month-to-date performance row. Revenue is CAD cents; the rest are counts. */
+export interface DashboardCentreRow {
+  centerId: string;
+  center: string;
+  revenue: number;
+  packages: number;
+  rentals: number;
+  lessons: number;
+  /** Booked (non-cancelled) bookings at this centre over the next 7 days. */
+  next7Days: number;
+}
+
+/** Per-service month-to-date performance row against its goal. */
+export interface DashboardServiceRow {
+  serviceId: string;
+  service: string;
+  /** True = requires an instructor (a "lesson"); false = a "rental". */
+  isLesson: boolean;
+  count: number;
+  revenue: number;
+  /** Resolved goal for the active measure, or null when no target is set. */
+  goalCount: number | null;
+  goalRevenue: number | null;
+}
+
+/** Future-bookings pipeline row (counts of booked bookings in each forward window). */
+export interface DashboardPipelineRow {
+  centerId: string;
+  center: string;
+  tomorrow: number;
+  next7Days: number;
+  next30Days: number;
+}
+
+/** A single actionable alert tile. `count` is the headline number; `amountCents` when it's money. */
+export interface DashboardAlert {
+  key: "missing_price" | "unassigned_instructor" | "missing_car";
+  count: number;
+}
+
+export interface DashboardReport {
+  /** Resolved month-to-date window (Montreal-local). monthKey is 'YYYY-MM'. */
+  from: string;
+  to: string;
+  monthKey: string;
+  daysElapsed: number;
+  daysInMonth: number;
+  currency: string;
+  missingPriceCount: number;
+  kpis: {
+    revenue: DashboardKpi;
+    packages: DashboardKpi;
+    rentals: DashboardKpi;
+    lessons: DashboardKpi;
+  };
+  forecast: {
+    /** Linear run-rate extrapolation of MTD revenue to month end (CAD cents). */
+    revenue: number;
+    /** Overall monthly revenue goal (cents), or null when unset. */
+    goal: number | null;
+    /** forecast.revenue / goal, or null when no goal. */
+    pctOfGoal: number | null;
+  };
+  centrePerformance: DashboardCentreRow[];
+  servicePerformance: DashboardServiceRow[];
+  /** service × centre count cross-tab (reuses the revenue pivot shape). */
+  serviceCentreMatrix: RevenuePivot | null;
+  pipeline: DashboardPipelineRow[];
+  /** Sum of price_cents of booked bookings in the next 7 / 30 days. */
+  pipelineForecast: { next7Days: number; next30Days: number };
+  alerts: DashboardAlert[];
+  /** Today's counts + deltas vs yesterday. */
+  quickStats: {
+    bookings: DashboardKpi;
+    lessons: DashboardKpi;
+    rentals: DashboardKpi;
+    packages: DashboardKpi;
+  };
+  /** Last-30-days realized/expected revenue trend (CAD cents), for the sparkline/area chart. */
+  revenueTrend: RevenueBucket[];
+}

@@ -1,4 +1,4 @@
-import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, packageBookingRequestSchema, resourceMutationSchema } from "../shared/schemas";
+import { adminBookingSchema, adminRescheduleSchema, availabilityRequestSchema, bookingRequestSchema, centerMutationSchema, overrideRequestSchema, packageBookingRequestSchema, resourceMutationSchema, targetMutationSchema } from "../shared/schemas";
 import type { BookingForm } from "../shared/types";
 import { validateBookingForm } from "../shared/types";
 import { getSlots } from "./availability";
@@ -313,6 +313,298 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
     byMonthOfYear: byMonthOrdered,
     pivot: pivotPayload
   });
+}
+
+/* -------------------------------------------------------------------------- */
+/* Executive dashboard                                                        */
+/* -------------------------------------------------------------------------- */
+
+// Add `delta` calendar days to a YYYY-MM-DD date, returning YYYY-MM-DD (UTC math, tz-agnostic).
+function shiftLocalDate(localDate: string, delta: number): string {
+  const [y, m, d] = localDate.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + delta)).toISOString().slice(0, 10);
+}
+
+// Number of days in the calendar month of a YYYY-MM-DD date.
+function daysInMonthOf(localDate: string): number {
+  const [y, m] = localDate.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).getUTCDate(); // day 0 of next month = last day of this month
+}
+
+/** Aggregated totals for one booking window, split lesson/rental and rolled up per service & centre. */
+interface WindowAgg {
+  revenue: number; packages: number; rentals: number; lessons: number; missingPrice: number;
+  byService: Map<string, { serviceId: string; service: string; isLesson: boolean; count: number; revenue: number }>;
+  byCenter: Map<string, { centerId: string; center: string; revenue: number; packages: number; rentals: number; lessons: number }>;
+}
+
+/**
+ * Aggregate every booked (revenue-expected) booking whose Montreal-local start date falls in
+ * [from, to], classifying each as a package session, a lesson (service requires an instructor), or a
+ * rental (no instructor required). `lessonServiceIds` is the set of instructor-requiring service ids.
+ */
+async function aggregateWindow(env: Env, from: string, to: string, lessonServiceIds: Set<string>): Promise<WindowAgg> {
+  const sqlFrom = shiftLocalDate(from, -1);
+  const sqlTo = shiftLocalDate(to, 1);
+  const rows = await env.DB.prepare(`
+    SELECT bookings.service_id, bookings.center_id, bookings.start_at, bookings.price_cents,
+      services.name_en AS service, centers.name AS center,
+      bookings.package_booking_id AS package_id
+    FROM bookings
+    JOIN services ON services.id = bookings.service_id
+    JOIN centers ON centers.id = bookings.center_id
+    WHERE bookings.start_at >= ? AND bookings.start_at <= ?
+      AND bookings.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+  `).bind(`${sqlFrom}T00:00:00Z`, `${sqlTo}T23:59:59Z`, ...REVENUE_EXPECTED_STATUSES)
+    .all<{ service_id: string; center_id: string; start_at: string; price_cents: number | null; service: string; center: string; package_id: string | null }>();
+
+  const agg: WindowAgg = { revenue: 0, packages: 0, rentals: 0, lessons: 0, missingPrice: 0, byService: new Map(), byCenter: new Map() };
+  for (const row of rows.results) {
+    const localDate = dateInTimeZone(row.start_at, REVENUE_TZ);
+    if (localDate < from || localDate > to) continue; // precise Montreal-local range filter
+    const cents = row.price_cents ?? 0;
+    if (row.price_cents == null) agg.missingPrice += 1; else agg.revenue += cents;
+
+    // A booking is a package session, else a lesson (instructor required), else a rental.
+    const isPackage = row.package_id != null;
+    const isLesson = !isPackage && lessonServiceIds.has(row.service_id);
+    const isRental = !isPackage && !isLesson;
+    if (isPackage) agg.packages += 1; else if (isLesson) agg.lessons += 1; else agg.rentals += 1;
+
+    const s = agg.byService.get(row.service_id) ?? { serviceId: row.service_id, service: row.service, isLesson: lessonServiceIds.has(row.service_id), count: 0, revenue: 0 };
+    s.count += 1; if (row.price_cents != null) s.revenue += cents;
+    agg.byService.set(row.service_id, s);
+
+    const c = agg.byCenter.get(row.center_id) ?? { centerId: row.center_id, center: row.center, revenue: 0, packages: 0, rentals: 0, lessons: 0 };
+    if (row.price_cents != null) c.revenue += cents;
+    if (isPackage) c.packages += 1; else if (isLesson) c.lessons += 1; else c.rentals += 1;
+    agg.byCenter.set(row.center_id, c);
+  }
+  return agg;
+}
+
+/**
+ * Executive dashboard payload: month-to-date KPIs vs the same window last month, a linear month-end
+ * revenue forecast, per-centre & per-service performance against manual goals, the service×centre
+ * count matrix, a forward-looking pipeline, alert counts, and today's quick stats. All money is CAD
+ * cents. Accepts ?month=YYYY-MM (defaults to the current Montreal month); the window is always the
+ * 1st of that month → today (or the month end for a past month).
+ */
+async function dashboardReport(request: Request, env: Env): Promise<Response> {
+  const params = new URL(request.url).searchParams;
+  const today = dateInTimeZone(new Date().toISOString(), REVENUE_TZ);
+  const monthParam = (params.get("month") || "").match(/^\d{4}-\d{2}$/) ? params.get("month")! : today.slice(0, 7);
+  const monthStart = `${monthParam}-01`;
+  const isCurrentMonth = monthParam === today.slice(0, 7);
+  // MTD for the current month ends today; for a past month it spans the whole month.
+  const to = isCurrentMonth ? today : `${monthParam}-${String(daysInMonthOf(monthStart)).padStart(2, "0")}`;
+  const daysInMonth = daysInMonthOf(monthStart);
+  const daysElapsed = isCurrentMonth ? Number(today.slice(8, 10)) : daysInMonth;
+
+  // Same MTD window one month earlier (1st → same day-count), clamped to that month's length so a
+  // 31-day month compared into a 30-day one doesn't spill into the following month.
+  const prevMonthStart = shiftLocalDate(monthStart, -1).slice(0, 7) + "-01";
+  const prevDaysInMonth = daysInMonthOf(prevMonthStart);
+  const prevTo = `${prevMonthStart.slice(0, 7)}-${String(Math.min(daysElapsed, prevDaysInMonth)).padStart(2, "0")}`;
+
+  // Services that require an instructor → "lessons"; everything else booked standalone → "rentals".
+  const lessonRows = await env.DB.prepare(
+    "SELECT DISTINCT service_id FROM service_resource_requirements WHERE resource_type='instructors' AND units >= 1"
+  ).all<{ service_id: string }>();
+  const lessonServiceIds = new Set(lessonRows.results.map((r) => r.service_id));
+
+  const [cur, prev] = await Promise.all([
+    aggregateWindow(env, monthStart, to, lessonServiceIds),
+    aggregateWindow(env, prevMonthStart, prevTo, lessonServiceIds),
+  ]);
+
+  const kpi = (value: number, prevValue: number) => ({
+    value, prevValue, deltaPct: prevValue ? (value - prevValue) / prevValue : null,
+  });
+
+  // Resolve manual goals for this month: month-specific row wins over the recurring (NULL-month)
+  // default. Returns a lookup by `${scope}:${scopeId ?? ""}:${metric}` → target_value.
+  const targetRows = await env.DB.prepare(
+    "SELECT scope, scope_id, metric, period_month, target_value FROM performance_targets WHERE period_month = ? OR period_month IS NULL"
+  ).bind(monthParam).all<{ scope: string; scope_id: string | null; metric: string; period_month: string | null; target_value: number }>();
+  const goals = new Map<string, number>();
+  // Apply defaults first, then let month-specific rows overwrite them.
+  for (const r of [...targetRows.results].sort((a, b) => (a.period_month ? 1 : 0) - (b.period_month ? 1 : 0))) {
+    goals.set(`${r.scope}:${r.scope_id ?? ""}:${r.metric}`, r.target_value);
+  }
+  const goalFor = (scope: string, scopeId: string | null, metric: string): number | null => {
+    const v = goals.get(`${scope}:${scopeId ?? ""}:${metric}`);
+    return v == null ? null : v;
+  };
+
+  // Month-end revenue forecast = MTD revenue extrapolated linearly over the whole month.
+  const forecastRevenue = daysElapsed > 0 ? Math.round(cur.revenue / daysElapsed * daysInMonth) : cur.revenue;
+  const overallGoal = goalFor("overall", null, "revenue");
+
+  // Forward pipeline: booked bookings grouped per centre across three forward windows, plus a
+  // revenue forecast (sum of priced bookings) for the next 7 / 30 days. Windows start "tomorrow".
+  const t1 = shiftLocalDate(today, 1);
+  const t7 = shiftLocalDate(today, 7);
+  const t30 = shiftLocalDate(today, 30);
+  const futureRows = await env.DB.prepare(`
+    SELECT bookings.center_id, centers.name AS center, bookings.start_at, bookings.price_cents
+    FROM bookings JOIN centers ON centers.id = bookings.center_id
+    WHERE bookings.start_at >= ? AND bookings.start_at <= ?
+      AND bookings.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+  `).bind(`${today}T00:00:00Z`, `${shiftLocalDate(t30, 1)}T23:59:59Z`, ...REVENUE_EXPECTED_STATUSES)
+    .all<{ center_id: string; center: string; start_at: string; price_cents: number | null }>();
+  const pipeMap = new Map<string, { centerId: string; center: string; tomorrow: number; next7Days: number; next30Days: number }>();
+  let pf7 = 0, pf30 = 0;
+  for (const row of futureRows.results) {
+    const d = dateInTimeZone(row.start_at, REVENUE_TZ);
+    if (d < t1 || d > t30) continue; // strictly future (from tomorrow), through 30 days out
+    const p = pipeMap.get(row.center_id) ?? { centerId: row.center_id, center: row.center, tomorrow: 0, next7Days: 0, next30Days: 0 };
+    if (d === t1) p.tomorrow += 1;
+    if (d <= t7) p.next7Days += 1;
+    p.next30Days += 1;
+    pipeMap.set(row.center_id, p);
+    if (d <= t7) pf7 += row.price_cents ?? 0;
+    pf30 += row.price_cents ?? 0;
+  }
+
+  // Per-centre "next 7 days" count (booked, from tomorrow) to sit beside the MTD centre table.
+  const next7ByCenter = new Map<string, number>();
+  for (const [id, p] of pipeMap) next7ByCenter.set(id, p.next7Days);
+
+  // Alerts — cheap counts over the current MTD window (the pane the user is looking at).
+  // missing_price: booked bookings in range with no numeric price (excluded from revenue).
+  const missingPrice = cur.missingPrice;
+  // unassigned_instructor: booked bookings on an instructor-requiring service with no instructor
+  // allocation. missing_car: booked on a car-requiring service with no vehicle allocation.
+  const alertWindow = { from: `${shiftLocalDate(monthStart, -1)}T00:00:00Z`, to: `${shiftLocalDate(to, 1)}T23:59:59Z` };
+  const unassignedRow = await env.DB.prepare(`
+    SELECT COUNT(*) AS n FROM bookings b
+    WHERE b.start_at >= ? AND b.start_at <= ?
+      AND b.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+      AND EXISTS (SELECT 1 FROM service_resource_requirements srr WHERE srr.service_id=b.service_id AND srr.resource_type='instructors' AND srr.units>=1)
+      AND NOT EXISTS (SELECT 1 FROM booking_resource_allocations bra JOIN resources r ON r.id=bra.resource_id WHERE bra.booking_id=b.id AND r.type='instructor')
+  `).bind(alertWindow.from, alertWindow.to, ...REVENUE_EXPECTED_STATUSES).first<{ n: number }>();
+  const missingCarRow = await env.DB.prepare(`
+    SELECT COUNT(*) AS n FROM bookings b
+    WHERE b.start_at >= ? AND b.start_at <= ?
+      AND b.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+      AND EXISTS (SELECT 1 FROM service_resource_requirements srr WHERE srr.service_id=b.service_id AND srr.resource_type='cars' AND srr.units>=1)
+      AND NOT EXISTS (SELECT 1 FROM booking_resource_allocations bra JOIN resources r ON r.id=bra.resource_id WHERE bra.booking_id=b.id AND r.type='vehicle')
+  `).bind(alertWindow.from, alertWindow.to, ...REVENUE_EXPECTED_STATUSES).first<{ n: number }>();
+
+  // Today vs yesterday quick stats.
+  const [todayAgg, yesterdayAgg] = await Promise.all([
+    aggregateWindow(env, today, today, lessonServiceIds),
+    aggregateWindow(env, shiftLocalDate(today, -1), shiftLocalDate(today, -1), lessonServiceIds),
+  ]);
+  const todayBookings = todayAgg.lessons + todayAgg.rentals + todayAgg.packages;
+  const yestBookings = yesterdayAgg.lessons + yesterdayAgg.rentals + yesterdayAgg.packages;
+
+  // Last-30-days daily revenue trend (realized vs expected), for the area chart.
+  const trendFrom = shiftLocalDate(today, -29);
+  const trendRows = await env.DB.prepare(`
+    SELECT bookings.start_at, bookings.status, bookings.price_cents
+    FROM bookings
+    WHERE bookings.start_at >= ? AND bookings.start_at <= ?
+      AND bookings.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+  `).bind(`${shiftLocalDate(trendFrom, -1)}T00:00:00Z`, `${shiftLocalDate(today, 1)}T23:59:59Z`, ...REVENUE_EXPECTED_STATUSES)
+    .all<{ start_at: string; status: string; price_cents: number | null }>();
+  const trendMap = new Map<string, { expected: number; realized: number; expectedCount: number; realizedCount: number }>();
+  for (const row of trendRows.results) {
+    const d = dateInTimeZone(row.start_at, REVENUE_TZ);
+    if (d < trendFrom || d > today) continue;
+    const b = trendMap.get(d) ?? { expected: 0, realized: 0, expectedCount: 0, realizedCount: 0 };
+    const cents = row.price_cents ?? 0;
+    b.expected += cents; b.expectedCount += 1;
+    if (row.status === "completed") { b.realized += cents; b.realizedCount += 1; }
+    trendMap.set(d, b);
+  }
+  const revenueTrend: Array<{ key: string; expected: number; realized: number; expectedCount: number; realizedCount: number }> = [];
+  for (let i = 0; i < 30; i++) {
+    const d = shiftLocalDate(trendFrom, i);
+    revenueTrend.push({ key: d, ...(trendMap.get(d) ?? { expected: 0, realized: 0, expectedCount: 0, realizedCount: 0 }) });
+  }
+
+  // Service × centre count matrix (reuse the RevenuePivot shape). Rows = services, cols = centres.
+  const rowKeys = [...cur.byService.values()].map((s) => s.service).sort((a, b) => a.localeCompare(b));
+  const colKeys = [...cur.byCenter.values()].map((c) => c.center).sort((a, b) => a.localeCompare(b));
+  const matrixCells: Array<{ row: string; col: string; expected: number; realized: number; expectedCount: number; realizedCount: number }> = [];
+  {
+    // Re-derive per (service, centre) counts in one pass over the current window's services.
+    const cellCounts = new Map<string, number>();
+    const sqlFrom = shiftLocalDate(monthStart, -1), sqlTo = shiftLocalDate(to, 1);
+    const cellRows = await env.DB.prepare(`
+      SELECT services.name_en AS service, centers.name AS center, bookings.start_at
+      FROM bookings JOIN services ON services.id=bookings.service_id JOIN centers ON centers.id=bookings.center_id
+      WHERE bookings.start_at >= ? AND bookings.start_at <= ?
+        AND bookings.status IN (${REVENUE_EXPECTED_STATUSES.map(() => "?").join(",")})
+    `).bind(`${sqlFrom}T00:00:00Z`, `${sqlTo}T23:59:59Z`, ...REVENUE_EXPECTED_STATUSES).all<{ service: string; center: string; start_at: string }>();
+    const SEP = String.fromCharCode(0); // NUL can't appear in D1 text → collision-proof service+centre key.
+    for (const r of cellRows.results) {
+      const d = dateInTimeZone(r.start_at, REVENUE_TZ);
+      if (d < monthStart || d > to) continue;
+      const k = r.service + SEP + r.center;
+      cellCounts.set(k, (cellCounts.get(k) ?? 0) + 1);
+    }
+    for (const [k, n] of cellCounts) {
+      const [row, col] = k.split(SEP);
+      matrixCells.push({ row, col, expected: 0, realized: 0, expectedCount: n, realizedCount: 0 });
+    }
+  }
+  const serviceCentreMatrix = rowKeys.length && colKeys.length
+    ? { row: "service" as const, col: "center" as const, rowKeys, colKeys, cells: matrixCells }
+    : null;
+
+  return json({
+    from: monthStart, to, monthKey: monthParam, daysElapsed, daysInMonth, currency: "CAD",
+    missingPriceCount: missingPrice,
+    kpis: {
+      revenue: kpi(cur.revenue, prev.revenue),
+      packages: kpi(cur.packages, prev.packages),
+      rentals: kpi(cur.rentals, prev.rentals),
+      lessons: kpi(cur.lessons, prev.lessons),
+    },
+    forecast: { revenue: forecastRevenue, goal: overallGoal, pctOfGoal: overallGoal ? forecastRevenue / overallGoal : null },
+    centrePerformance: [...cur.byCenter.values()]
+      .map((c) => ({ centerId: c.centerId, center: c.center, revenue: c.revenue, packages: c.packages, rentals: c.rentals, lessons: c.lessons, next7Days: next7ByCenter.get(c.centerId) ?? 0 }))
+      .sort((a, b) => b.revenue - a.revenue),
+    servicePerformance: [...cur.byService.values()]
+      .map((s) => ({ serviceId: s.serviceId, service: s.service, isLesson: s.isLesson, count: s.count, revenue: s.revenue, goalCount: goalFor("service", s.serviceId, "count"), goalRevenue: goalFor("service", s.serviceId, "revenue") }))
+      .sort((a, b) => b.count - a.count),
+    serviceCentreMatrix,
+    pipeline: [...pipeMap.values()].sort((a, b) => b.next30Days - a.next30Days),
+    pipelineForecast: { next7Days: pf7, next30Days: pf30 },
+    alerts: [
+      { key: "missing_price", count: missingPrice },
+      { key: "unassigned_instructor", count: unassignedRow?.n ?? 0 },
+      { key: "missing_car", count: missingCarRow?.n ?? 0 },
+    ],
+    quickStats: {
+      bookings: kpi(todayBookings, yestBookings),
+      lessons: kpi(todayAgg.lessons, yesterdayAgg.lessons),
+      rentals: kpi(todayAgg.rentals, yesterdayAgg.rentals),
+      packages: kpi(todayAgg.packages, yesterdayAgg.packages),
+    },
+    revenueTrend,
+  });
+}
+
+/** Upsert a performance target by its logical key (SQLite treats NULL period_month as distinct in a
+ *  UNIQUE index, so we look up + update/insert rather than relying on ON CONFLICT). */
+async function saveTarget(env: Env, body: { scope: string; scopeId: string | null; metric: string; periodMonth: string | null; targetValue: number }): Promise<string> {
+  const existing = await env.DB.prepare(
+    "SELECT id FROM performance_targets WHERE scope=? AND scope_id IS ? AND metric=? AND period_month IS ?"
+  ).bind(body.scope, body.scopeId, body.metric, body.periodMonth).first<{ id: string }>();
+  if (existing) {
+    await env.DB.prepare("UPDATE performance_targets SET target_value=?, updated_at=CURRENT_TIMESTAMP WHERE id=?")
+      .bind(body.targetValue, existing.id).run();
+    return existing.id;
+  }
+  const id = uuid();
+  await env.DB.prepare(
+    "INSERT INTO performance_targets(id, scope, scope_id, metric, period_month, target_value) VALUES (?,?,?,?,?,?)"
+  ).bind(id, body.scope, body.scopeId, body.metric, body.periodMonth, body.targetValue).run();
+  return id;
 }
 
 async function adminCrud(request: Request, env: Env, path: string, user: Awaited<ReturnType<typeof requireUser>>) {
@@ -1059,6 +1351,33 @@ async function route(request: Request, env: Env, ctx: ExecutionContext): Promise
       // Revenue analytics is sensitive → owner/admin only (staff is excluded).
       requireRole(user, ["owner", "admin"]);
       return revenueReport(request, env);
+    }
+    if (path === "/api/admin/dashboard" && method === "GET") {
+      // Executive dashboard exposes revenue → owner/admin only, like the revenue report.
+      requireRole(user, ["owner", "admin"]);
+      return dashboardReport(request, env);
+    }
+    if (path === "/api/admin/targets") {
+      requireRole(user, ["owner", "admin"]);
+      if (method === "GET") {
+        const rows = await env.DB.prepare(
+          "SELECT id, scope, scope_id, metric, period_month, target_value FROM performance_targets ORDER BY scope, scope_id, metric"
+        ).all<{ id: string; scope: string; scope_id: string | null; metric: string; period_month: string | null; target_value: number }>();
+        return json({ targets: rows.results.map((r) => ({ id: r.id, scope: r.scope, scopeId: r.scope_id, metric: r.metric, periodMonth: r.period_month, targetValue: r.target_value })) });
+      }
+      if (method === "POST" || method === "PUT") {
+        const payload = targetMutationSchema.parse(await readJson(request));
+        const id = await saveTarget(env, { scope: payload.scope, scopeId: payload.scopeId ?? null, metric: payload.metric, periodMonth: payload.periodMonth ?? null, targetValue: payload.targetValue });
+        await audit(env, user.id, "upsert", "performance_target", id, payload, request);
+        return json({ id, ...payload }, method === "POST" ? 201 : 200);
+      }
+    }
+    const targetDeleteMatch = path.match(/^\/api\/admin\/targets\/([^/]+)$/);
+    if (targetDeleteMatch && method === "DELETE") {
+      requireRole(user, ["owner", "admin"]);
+      await env.DB.prepare("DELETE FROM performance_targets WHERE id=?").bind(targetDeleteMatch[1]).run();
+      await audit(env, user.id, "delete", "performance_target", targetDeleteMatch[1], {}, request);
+      return new Response(null, { status: 204 });
     }
     if (path === "/api/admin/overrides" && method === "GET") {
       const results = await env.DB.prepare(`

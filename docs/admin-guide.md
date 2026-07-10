@@ -326,6 +326,61 @@ In both modes, the booking page greys out the times that would break the order a
 2. If you remove a service from a package, any "Must follow" pointing at it is cleared automatically.
 3. After saving, make a test package booking and confirm the ordering behaves as intended at an enabled center.
 
+## Dashboard
+
+The **Dashboard** page (owner/admin only — it does not appear for staff) is the month's scorecard: how the current month is tracking so far, how it will likely finish, and what needs attention today. Open it from the top of the left sidebar. Use the **month picker** in the header to look at a past month; the default is the current month.
+
+Every number is read live from your bookings — there is nothing to enter except your goals (below). To understand any figure, read the assumptions here first.
+
+### Month-to-date (MTD)
+
+All the top figures cover **the 1st of the selected month through today** (America/Montreal), not a rolling window. On the 10th, "Revenue (MTD)" is the revenue booked from the 1st to the 10th.
+
+The **"vs Last Month"** delta under each KPI compares against the **same slice of the previous month** — the 1st through the same day-count — so you're comparing the first 10 days of this month against the first 10 days of last month, never a full month against a partial one. (If last month was shorter, the window is clamped to that month's length.) A green ↑ / red ↓ shows the direction; it reads "—" when there's nothing to compare against.
+
+### Lessons vs Rentals
+
+The Dashboard splits bookings into **Packages**, **Rentals**, and **Lessons**:
+
+- **Packages** — any booking that is part of a multi-session [package](#packages).
+- **Lessons** — a standalone booking for a service that **requires an instructor**.
+- **Rentals** — a standalone booking for a service that does **not** require an instructor (a car booked without a teacher).
+
+> **Assumption:** lesson-vs-rental is **inferred**, not tagged. A service counts as a lesson whenever it has an *instructor* requirement under [Services → resource requirements](#services). There is no manual "this is a rental" switch. If a service that should have an instructor is missing that requirement, its bookings will show up as **rentals** — so if the split looks wrong, check the service's requirements first.
+
+### Forecast (month end)
+
+The **Forecast** KPI projects where revenue will land by month end. It is a simple **linear run-rate**: revenue booked so far ÷ days elapsed × days in the month.
+
+> **Assumptions:** it assumes an **even daily pace** for the rest of the month, and it only extends **already-booked revenue** — it is a straight-line estimate, not a statistical or seasonal projection. Early in the month (few days elapsed) it is very sensitive to a single day; it steadies as the month fills in. The **"% of monthly goal"** underneath compares the forecast to your **overall revenue goal** (see below); with no goal set it shows a "Set a goal" link instead.
+
+### Goals
+
+The **Service performance** card shows each service's month-to-date count and revenue against a **goal**, with a progress bar. Goals are entered by you — they are **not** derived from history.
+
+- Click **Set goals** on the Service performance card to open the editor.
+- Set an **overall month-end revenue goal** (this drives the Forecast % above), and, per service, a **bookings goal** and/or a **revenue goal**.
+- Leave a field **blank** for no goal — that service shows "—" with no progress bar.
+
+> **Assumption:** a goal you set is a **recurring monthly default** — the same target applies to every month until you change it. (Month-specific overrides are supported by the system but are not exposed in this editor yet.) The progress bar tracks the **bookings goal** if one is set, otherwise the revenue goal.
+
+### The rest of the page
+
+- **Centre performance** — per-centre month-to-date revenue and the Packages / Rentals / Lessons split, plus a **Next 7 days** count of upcoming bookings at that centre.
+- **Service × centre** — a table of how many bookings each service has at each centre this month, shaded by volume.
+- **Future bookings pipeline** — booked bookings per centre for **Tomorrow**, the **Next 7 days**, and the **Next 30 days** (all counted from tomorrow forward), plus a forecast of the revenue already on the books for the next 7 and 30 days. This forecast is a straight **sum of prices on future bookings**, not an extrapolation.
+- **Alerts & actions** — counts of things to fix in the current month: bookings **without a price** (excluded from revenue), bookings on an instructor service with **no instructor assigned**, and bookings on a car service with **no vehicle assigned**. Click a tile to jump to Bookings.
+- **Quick stats (today)** — today's bookings, lessons, rentals, and packages, each with a delta **vs yesterday**.
+- **Revenue trend (last 30 days)** — expected vs realized revenue per day.
+
+### What counts as revenue (same rules as Analysis)
+
+- Only bookings with a **numeric price** count toward revenue; priceless bookings are excluded and surfaced in the Alerts tile. Set **Price for revenue** on the [Service](#services) or [Package](#packages).
+- **Expected** revenue is everything booked (confirmed, pending, completed); **Realized** is completed only. **Cancelled and no-show** bookings never count.
+- A package's whole price is attributed to its **earliest session**, so package revenue lands in the month that session falls in.
+
+For deeper, arbitrary-range analysis, use the [Analysis](#analysis) page.
+
 ## Analysis
 
 The **Analysis** page (owner/admin only — it does not appear for staff) turns your bookings into revenue and volume insights over any date range. Open it from the left sidebar.
@@ -346,7 +401,7 @@ Cancelled and no-show bookings never count toward either.
 
 ### Choosing the range
 
-- **Presets**: 7 days, 30 days, 90 days, Year to date, 12 months.
+- **Presets**: 7 days, 30 days, 90 days, Month to date, Year to date, 12 months.
 - **From / To**: pick any custom start and end (Montreal local dates).
 - **Group by**: Day, Week, or Month — controls the buckets on the "over time" chart.
 - **Compare**: overlay the **previous period** (same length, immediately before) or **year over year** (same dates one year earlier) on the trend chart as a dashed line.

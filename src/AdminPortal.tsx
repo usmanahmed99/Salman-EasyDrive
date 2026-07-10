@@ -62,11 +62,15 @@ import type {
   RevenuePivot,
   RevenuePivotCell,
   RevenueReport,
+  DashboardReport,
+  DashboardServiceRow,
+  PerformanceTarget,
   Service
 } from "../shared/types";
 import { fieldNeedsOptions, validateBookingForm } from "../shared/types";
 
 type AdminSection =
+  | "overview"
   | "dashboard"
   | "bookings"
   | "revenue"
@@ -105,7 +109,8 @@ interface AdminBooking {
 }
 
 const nav: Array<{ id: AdminSection; label: string; icon: typeof LayoutDashboard; roles?: AdminUser["role"][] }> = [
-  { id: "dashboard", label: "Today", icon: LayoutDashboard },
+  { id: "overview", label: "Dashboard", icon: LayoutDashboard, roles: ["owner", "admin"] },
+  { id: "dashboard", label: "Today", icon: CircleGauge },
   { id: "bookings", label: "Bookings", icon: CalendarDays },
   { id: "revenue", label: "Analysis", icon: TrendingUp, roles: ["owner", "admin"] },
   { id: "centers", label: "Centers", icon: MapPin },
@@ -3551,11 +3556,12 @@ const DIMENSION_LABELS: Record<RevenueDimension, string> = {
   service: "Service", center: "Center", instructor: "Instructor", package: "Package", weekday: "Day of week", month: "Month of year"
 };
 
-type RangePreset = "7d" | "30d" | "90d" | "ytd" | "12m" | "custom";
+type RangePreset = "7d" | "30d" | "90d" | "mtd" | "ytd" | "12m" | "custom";
 
 /** Compute [from, to] (YYYY-MM-DD, Montreal-local) for a preset relative to today. */
 function presetRange(preset: Exclude<RangePreset, "custom">): { from: string; to: string } {
   const to = montrealToday();
+  if (preset === "mtd") return { from: to.slice(0, 7) + "-01", to };
   if (preset === "ytd") return { from: to.slice(0, 4) + "-01-01", to };
   const days = preset === "7d" ? 6 : preset === "30d" ? 29 : preset === "90d" ? 89 : 364;
   return { from: addDays(to, -days), to };
@@ -3995,6 +4001,522 @@ function PivotTable({ report, measure, row, col, onRow, onCol }: {
   );
 }
 
+/* -------------------------------------------------------------------------- */
+/* Executive dashboard (month-to-date)                                        */
+/* -------------------------------------------------------------------------- */
+
+/** Signed percentage delta pill (e.g. "↑ 18.6% vs Last Month"). null delta → muted "—". */
+function DeltaBadge({ delta, suffix }: { delta: number | null; suffix: string }) {
+  if (delta == null) return <span className="text-xs text-slate-400">—</span>;
+  const up = delta >= 0;
+  return (
+    <span className={clsx("text-xs font-semibold", up ? "text-emerald-600" : "text-rose-600")}>
+      {up ? "↑" : "↓"} {Math.abs(delta * 100).toFixed(1)}% <span className="font-normal text-slate-400">{suffix}</span>
+    </span>
+  );
+}
+
+/** A KPI tile for the dashboard: big value + a vs-comparison delta underneath. */
+function DashKpi({ label, value, delta, deltaSuffix, accent, icon }: {
+  label: string; value: string; delta: number | null; deltaSuffix: string; accent: string; icon: React.ReactNode;
+}) {
+  return (
+    <div className="card p-5">
+      <div className="flex items-center gap-2.5">
+        <span className="grid h-9 w-9 place-items-center rounded-full text-white" style={{ backgroundColor: accent }}>{icon}</span>
+        <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+      </div>
+      <p className="mt-3 text-2xl font-extrabold text-ink sm:text-3xl">{value}</p>
+      <div className="mt-1"><DeltaBadge delta={delta} suffix={deltaSuffix} /></div>
+    </div>
+  );
+}
+
+/** A horizontal progress bar (value vs goal) with amber/green tint by attainment. */
+function GoalBar({ value, goal }: { value: number; goal: number | null }) {
+  if (goal == null || goal <= 0) return <span className="text-xs text-slate-300">—</span>;
+  const pct = Math.min(1, value / goal);
+  const color = pct >= 0.75 ? "#059669" : pct >= 0.4 ? "#d97706" : "#dc2626";
+  return (
+    <div className="flex items-center gap-2">
+      <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+        <div className="h-full rounded-full" style={{ width: `${pct * 100}%`, backgroundColor: color }} />
+      </div>
+      <span className="w-9 text-right text-xs font-semibold tabular-nums text-slate-500">{Math.round(pct * 100)}%</span>
+    </div>
+  );
+}
+
+const ALERT_LABELS: Record<string, { title: string; sub: string }> = {
+  missing_price: { title: "Bookings without price", sub: "Excluded from revenue" },
+  unassigned_instructor: { title: "Unassigned instructor", sub: "Needs assignment" },
+  missing_car: { title: "Bookings without car", sub: "Check vehicle availability" },
+};
+
+/**
+ * Modal to set manual monthly goals. Rows: overall revenue goal + one goal per service (count or
+ * revenue). Goals are the recurring default (period_month = null) — the simplest mental model for the
+ * client; month-specific overrides can be added later without a schema change.
+ */
+function GoalsModal({ services, monthKey, onClose, toast }: {
+  services: Service[]; monthKey: string; onClose: (changed: boolean) => void; toast: ReturnType<typeof useToast>;
+}) {
+  const [targets, setTargets] = useState<PerformanceTarget[] | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  // Local editable map keyed by `${scope}:${scopeId}:${metric}` → string input value.
+  const [values, setValues] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    adminApi.targets()
+      .then((res) => {
+        setTargets(res.targets);
+        const v: Record<string, string> = {};
+        for (const t of res.targets) {
+          if (t.periodMonth != null) continue; // editor manages the recurring default only
+          const raw = t.metric === "revenue" ? (t.targetValue / 100).toString() : t.targetValue.toString();
+          v[`${t.scope}:${t.scopeId ?? ""}:${t.metric}`] = raw;
+        }
+        setValues(v);
+      })
+      .catch((err) => toast.show("error", errorMessage(err)));
+  }, [toast]);
+
+  const set = (key: string, val: string) => { setValues((prev) => ({ ...prev, [key]: val })); setDirty(true); };
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      // Build the desired set of goals from the inputs; blank clears (delete) an existing target.
+      const existing = new Map((targets ?? []).filter((t) => t.periodMonth == null).map((t) => [`${t.scope}:${t.scopeId ?? ""}:${t.metric}`, t]));
+      const jobs: Promise<unknown>[] = [];
+      const upsert = (scope: PerformanceTarget["scope"], scopeId: string | null, metric: PerformanceTarget["metric"], raw: string) => {
+        const key = `${scope}:${scopeId ?? ""}:${metric}`;
+        const trimmed = (raw ?? "").trim();
+        if (trimmed === "") {
+          const prev = existing.get(key);
+          if (prev) jobs.push(adminApi.deleteTarget(prev.id));
+          return;
+        }
+        const num = Number(trimmed.replace(/[^0-9.]/g, ""));
+        if (!Number.isFinite(num) || num < 0) return;
+        const targetValue = metric === "revenue" ? Math.round(num * 100) : Math.round(num);
+        jobs.push(adminApi.saveTarget({ scope, scopeId, metric, periodMonth: null, targetValue }));
+      };
+      upsert("overall", null, "revenue", values["overall::revenue"] ?? "");
+      for (const s of services) {
+        upsert("service", s.id, "count", values[`service:${s.id}:count`] ?? "");
+        upsert("service", s.id, "revenue", values[`service:${s.id}:revenue`] ?? "");
+      }
+      await Promise.all(jobs);
+      toast.show("success", "Goals saved.");
+      onClose(true);
+    } catch (err) {
+      toast.show("error", errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => onClose(dirty ? false : false)}>
+      <div className="card max-h-[85vh] w-full max-w-2xl overflow-auto p-6" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-lg font-extrabold text-ink">Set monthly goals</h3>
+            <p className="mt-0.5 text-xs text-slate-500">Recurring targets applied to every month. Revenue in dollars; counts as whole numbers. Leave blank for no goal.</p>
+          </div>
+          <button className="secondary-button min-h-9 !px-2 !py-2" onClick={() => onClose(false)} aria-label="Close"><X size={16} /></button>
+        </div>
+
+        {targets == null ? (
+          <div className="grid h-40 place-items-center"><LoaderCircle className="animate-spin text-brand-500" size={28} /></div>
+        ) : (
+          <div className="mt-5 space-y-6">
+            <div>
+              <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Overall</p>
+              <Field label="Month-end revenue goal ($)" hint="Drives the Forecast month-end % of goal.">
+                <input className="field" inputMode="decimal" placeholder="e.g. 30000"
+                  value={values["overall::revenue"] ?? ""} onChange={(e) => set("overall::revenue", e.target.value)} />
+              </Field>
+            </div>
+            <div>
+              <p className="mb-2 text-[11px] font-bold uppercase tracking-wider text-slate-400">Per service</p>
+              <div className="overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    <tr><th className="py-2 pr-3 text-left">Service</th><th className="px-3 py-2 text-right">Bookings goal</th><th className="px-3 py-2 text-right">Revenue goal ($)</th></tr>
+                  </thead>
+                  <tbody>
+                    {services.map((s) => (
+                      <tr key={s.id} className="border-t border-slate-100">
+                        <td className="py-2 pr-3 font-semibold text-ink">{s.name.en}</td>
+                        <td className="px-3 py-2 text-right">
+                          <input className="field w-24 text-right" inputMode="numeric" placeholder="—"
+                            value={values[`service:${s.id}:count`] ?? ""} onChange={(e) => set(`service:${s.id}:count`, e.target.value)} />
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <input className="field w-28 text-right" inputMode="decimal" placeholder="—"
+                            value={values[`service:${s.id}:revenue`] ?? ""} onChange={(e) => set(`service:${s.id}:revenue`, e.target.value)} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="mt-6 flex justify-end gap-2">
+          <button className="secondary-button min-h-10 px-4" onClick={() => onClose(false)} disabled={saving}>Cancel</button>
+          <button className="primary-button min-h-10 px-4" onClick={save} disabled={saving || targets == null}>
+            {saving ? <LoaderCircle className="animate-spin" size={16} /> : "Save goals"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Executive dashboard. Month-to-date KPIs vs last month, a linear month-end forecast, per-centre and
+ * per-service performance against manual goals, the service×centre matrix, a forward pipeline, alerts,
+ * and today's quick stats. Reads a single `/api/admin/dashboard` payload (see `dashboardReport`).
+ */
+function DashboardScreen({ services, toast, openSection }: {
+  services: Service[]; toast: ReturnType<typeof useToast>; openSection: (s: AdminSection) => void;
+}) {
+  const [month, setMonth] = useState(() => montrealToday().slice(0, 7));
+  const [report, setReport] = useState<DashboardReport | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [goalsOpen, setGoalsOpen] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    adminApi.dashboard({ month })
+      .then((r) => { if (!cancelled) setReport(r); })
+      .catch((err) => { if (!cancelled) toast.show("error", errorMessage(err)); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [month, reloadKey, toast]);
+
+  const monthLabel = useMemo(() => {
+    const [y, m] = month.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-CA", { month: "long", year: "numeric", timeZone: "UTC" });
+  }, [month]);
+
+  // Trend rows (dollars) for the 30-day area chart.
+  const trendData = useMemo(() => (report?.revenueTrend ?? []).map((p) => ({
+    key: p.key.slice(5), // MM-DD
+    expected: centsToDollars(p.expected),
+    realized: centsToDollars(p.realized),
+  })), [report]);
+
+  const exportReport = () => {
+    if (!report) return;
+    const money = (c: number) => (c / 100).toFixed(2);
+    const rows: (string | number)[][] = [
+      ["section", "row", "value", "extra"],
+      ["period", `${report.from}..${report.to}`, `day ${report.daysElapsed}/${report.daysInMonth}`, ""],
+      ["kpi", "revenue_cad", money(report.kpis.revenue.value), `prev ${money(report.kpis.revenue.prevValue)}`],
+      ["kpi", "packages", report.kpis.packages.value, `prev ${report.kpis.packages.prevValue}`],
+      ["kpi", "rentals", report.kpis.rentals.value, `prev ${report.kpis.rentals.prevValue}`],
+      ["kpi", "lessons", report.kpis.lessons.value, `prev ${report.kpis.lessons.prevValue}`],
+      ["forecast", "revenue_cad", money(report.forecast.revenue), report.forecast.goal ? `goal ${money(report.forecast.goal)}` : "no goal"],
+      ...report.centrePerformance.map((c) => ["centre", c.center, money(c.revenue), `pkg ${c.packages} / rent ${c.rentals} / less ${c.lessons} / next7 ${c.next7Days}`]),
+      ...report.servicePerformance.map((s) => ["service", s.service, s.count, `rev ${money(s.revenue)} / goalN ${s.goalCount ?? ""} / goal$ ${s.goalRevenue != null ? money(s.goalRevenue) : ""}`]),
+      ...report.pipeline.map((p) => ["pipeline", p.center, p.next30Days, `tomorrow ${p.tomorrow} / next7 ${p.next7Days}`]),
+    ];
+    saveCsv(`dashboard_${report.monthKey}.csv`, rows);
+  };
+
+  const isCurrent = month === montrealToday().slice(0, 7);
+  const k = report?.kpis;
+  const totalCentre = useMemo(() => {
+    const c = report?.centrePerformance ?? [];
+    return {
+      revenue: c.reduce((s, x) => s + x.revenue, 0), packages: c.reduce((s, x) => s + x.packages, 0),
+      rentals: c.reduce((s, x) => s + x.rentals, 0), lessons: c.reduce((s, x) => s + x.lessons, 0),
+      next7: c.reduce((s, x) => s + x.next7Days, 0),
+    };
+  }, [report]);
+
+  return (
+    <div className="space-y-6">
+      {/* Header controls */}
+      <div className="card flex flex-wrap items-center justify-between gap-3 p-4">
+        <div>
+          <h2 className="text-lg font-extrabold text-ink">Month-to-date · {monthLabel}</h2>
+          {report && <p className="text-xs text-slate-500">{report.from} → {report.to} · day {report.daysElapsed} of {report.daysInMonth} · America/Montreal</p>}
+        </div>
+        <div className="flex items-center gap-2">
+          <input type="month" className="field h-10" value={month} max={montrealToday().slice(0, 7)} onChange={(e) => setMonth(e.target.value || montrealToday().slice(0, 7))} />
+          <button className="secondary-button min-h-10 px-3" onClick={exportReport} disabled={!report}><Download size={15} /> Export</button>
+        </div>
+      </div>
+
+      {loading && !report ? (
+        <div className="grid h-64 place-items-center"><LoaderCircle className="animate-spin text-brand-500" size={32} /></div>
+      ) : !report ? null : (
+        <>
+          {/* KPI row */}
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+            <DashKpi label="Revenue (MTD)" value={fmtMoney(k!.revenue.value)} delta={k!.revenue.deltaPct} deltaSuffix="vs Last Month" accent="#059669" icon={<CircleGauge size={18} />} />
+            <DashKpi label="Packages (MTD)" value={NUM.format(k!.packages.value)} delta={k!.packages.deltaPct} deltaSuffix="vs Last Month" accent="#4f46e5" icon={<PackageIcon size={18} />} />
+            <DashKpi label="Rentals (MTD)" value={NUM.format(k!.rentals.value)} delta={k!.rentals.deltaPct} deltaSuffix="vs Last Month" accent="#d97706" icon={<CarFront size={18} />} />
+            <DashKpi label="Lessons (MTD)" value={NUM.format(k!.lessons.value)} delta={k!.lessons.deltaPct} deltaSuffix="vs Last Month" accent="#7c3aed" icon={<UsersRound size={18} />} />
+            <div className="card p-5">
+              <div className="flex items-center gap-2.5">
+                <span className="grid h-9 w-9 place-items-center rounded-full bg-sky-600 text-white"><TrendingUp size={18} /></span>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Forecast (month end)</p>
+              </div>
+              <p className="mt-3 text-2xl font-extrabold text-ink sm:text-3xl">{fmtMoney(report.forecast.revenue)}</p>
+              {report.forecast.pctOfGoal != null
+                ? <p className="mt-1 text-xs text-slate-500">{Math.round(report.forecast.pctOfGoal * 100)}% of monthly goal</p>
+                : <button className="mt-1 text-xs font-semibold text-brand-600 hover:underline" onClick={() => setGoalsOpen(true)}>Set a goal →</button>}
+            </div>
+          </div>
+
+          {report.missingPriceCount > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+              {report.missingPriceCount} in-range booking{report.missingPriceCount === 1 ? " has" : "s have"} no price and {report.missingPriceCount === 1 ? "is" : "are"} excluded from revenue.
+            </div>
+          )}
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            {/* Centre performance */}
+            <div className="card p-5">
+              <div className="flex items-center justify-between"><h3 className="font-extrabold text-ink">Centre performance</h3></div>
+              <div className="mt-3 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    <tr><th className="py-2 pr-3 text-left">Centre</th><th className="px-2 py-2 text-right">Revenue</th><th className="px-2 py-2 text-right">Pkg</th><th className="px-2 py-2 text-right">Rentals</th><th className="px-2 py-2 text-right">Lessons</th><th className="px-2 py-2 text-right">Next 7d</th></tr>
+                  </thead>
+                  <tbody>
+                    {report.centrePerformance.map((c) => (
+                      <tr key={c.centerId} className="border-t border-slate-100">
+                        <td className="py-2 pr-3 font-semibold text-ink">{c.center}</td>
+                        <td className="px-2 py-2 text-right tabular-nums text-emerald-700">{fmtMoney(c.revenue)}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{c.packages}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{c.rentals}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{c.lessons}</td>
+                        <td className="px-2 py-2 text-right tabular-nums text-brand-600">{c.next7Days}</td>
+                      </tr>
+                    ))}
+                    {report.centrePerformance.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-sm text-slate-400">No bookings this month.</td></tr>}
+                    {report.centrePerformance.length > 0 && (
+                      <tr className="border-t-2 border-slate-200 font-bold">
+                        <td className="py-2 pr-3 uppercase tracking-wider text-slate-400">Total</td>
+                        <td className="px-2 py-2 text-right tabular-nums text-emerald-700">{fmtMoney(totalCentre.revenue)}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{totalCentre.packages}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{totalCentre.rentals}</td>
+                        <td className="px-2 py-2 text-right tabular-nums">{totalCentre.lessons}</td>
+                        <td className="px-2 py-2 text-right tabular-nums text-brand-600">{totalCentre.next7}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Service performance vs goal */}
+            <div className="card p-5">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-extrabold text-ink">Service performance</h3>
+                <button className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-500 hover:bg-slate-50" onClick={() => setGoalsOpen(true)}><Plus size={13} /> Set goals</button>
+              </div>
+              <div className="mt-3 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    <tr><th className="py-2 pr-3 text-left">Service</th><th className="px-2 py-2 text-right">Count</th><th className="px-2 py-2 text-right">Revenue</th><th className="px-2 py-2 text-right">Goal</th><th className="px-2 py-2 text-left">Progress</th></tr>
+                  </thead>
+                  <tbody>
+                    {report.servicePerformance.map((s) => {
+                      // Progress uses the count goal if set, else the revenue goal; shows the same measure's goal cell.
+                      const goalCell = s.goalCount != null ? NUM.format(s.goalCount) : s.goalRevenue != null ? fmtMoney(s.goalRevenue) : "—";
+                      const barValue = s.goalCount != null ? s.count : s.revenue;
+                      const barGoal = s.goalCount != null ? s.goalCount : s.goalRevenue;
+                      return (
+                        <tr key={s.serviceId} className="border-t border-slate-100">
+                          <td className="py-2 pr-3 font-semibold text-ink">
+                            {s.service}
+                            <span className={clsx("ml-2 rounded px-1.5 py-0.5 text-[9px] font-bold uppercase", s.isLesson ? "bg-violet-100 text-violet-700" : "bg-amber-100 text-amber-700")}>{s.isLesson ? "Lesson" : "Rental"}</span>
+                          </td>
+                          <td className="px-2 py-2 text-right tabular-nums">{s.count}</td>
+                          <td className="px-2 py-2 text-right tabular-nums text-emerald-700">{fmtMoney(s.revenue)}</td>
+                          <td className="px-2 py-2 text-right tabular-nums text-slate-500">{goalCell}</td>
+                          <td className="px-2 py-2"><GoalBar value={barValue} goal={barGoal} /></td>
+                        </tr>
+                      );
+                    })}
+                    {report.servicePerformance.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-sm text-slate-400">No bookings this month.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          {/* Service × centre matrix (reuse the pivot table renderer, read-only dimensions) */}
+          {report.serviceCentreMatrix && (
+            <MatrixCard matrix={report.serviceCentreMatrix} />
+          )}
+
+          <div className="grid gap-6 lg:grid-cols-3">
+            {/* Future bookings pipeline */}
+            <div className="card p-5 lg:col-span-2">
+              <h3 className="font-extrabold text-ink">Future bookings pipeline</h3>
+              <div className="mt-3 overflow-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                    <tr><th className="py-2 pr-3 text-left">Centre</th><th className="px-3 py-2 text-right">Tomorrow</th><th className="px-3 py-2 text-right">Next 7 days</th><th className="px-3 py-2 text-right">Next 30 days</th></tr>
+                  </thead>
+                  <tbody>
+                    {report.pipeline.map((p) => (
+                      <tr key={p.centerId} className="border-t border-slate-100">
+                        <td className="py-2 pr-3 font-semibold text-ink">{p.center}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{p.tomorrow}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{p.next7Days}</td>
+                        <td className="px-3 py-2 text-right tabular-nums">{p.next30Days}</td>
+                      </tr>
+                    ))}
+                    {report.pipeline.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-sm text-slate-400">No upcoming bookings.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3 text-center">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">Forecast revenue · next 7 days</p>
+                  <p className="mt-1 text-xl font-extrabold text-emerald-700">{fmtMoney(report.pipelineForecast.next7Days)}</p>
+                </div>
+                <div className="rounded-xl border border-brand-100 bg-brand-50 p-3 text-center">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-brand-700">Forecast revenue · next 30 days</p>
+                  <p className="mt-1 text-xl font-extrabold text-brand-700">{fmtMoney(report.pipelineForecast.next30Days)}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Alerts & actions */}
+            <div className="card p-5">
+              <h3 className="font-extrabold text-ink">Alerts &amp; actions</h3>
+              <div className="mt-3 space-y-2">
+                {report.alerts.map((a) => {
+                  const meta = ALERT_LABELS[a.key];
+                  const muted = a.count === 0;
+                  return (
+                    <button key={a.key} onClick={() => openSection("bookings")}
+                      className={clsx("flex w-full items-center justify-between rounded-xl border px-3 py-2.5 text-left", muted ? "border-slate-100 bg-slate-50" : "border-amber-200 bg-amber-50 hover:bg-amber-100")}>
+                      <span className="flex items-center gap-2.5">
+                        <AlertTriangle size={16} className={muted ? "text-slate-300" : "text-amber-500"} />
+                        <span><span className="block text-sm font-semibold text-ink">{meta.title}</span><span className="block text-[11px] text-slate-500">{meta.sub}</span></span>
+                      </span>
+                      <span className={clsx("rounded-full px-2 py-0.5 text-xs font-bold tabular-nums", muted ? "bg-slate-200 text-slate-500" : "bg-amber-500 text-white")}>{a.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* Quick stats (today) */}
+          <div className="card p-5">
+            <h3 className="font-extrabold text-ink">Quick stats <span className="text-sm font-normal text-slate-400">(today)</span></h3>
+            <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+              {([
+                { label: "Bookings today", kpi: report.quickStats.bookings, icon: <CalendarDays size={16} />, accent: "#4f46e5" },
+                { label: "Lessons today", kpi: report.quickStats.lessons, icon: <UsersRound size={16} />, accent: "#7c3aed" },
+                { label: "Rentals today", kpi: report.quickStats.rentals, icon: <CarFront size={16} />, accent: "#d97706" },
+                { label: "Packages today", kpi: report.quickStats.packages, icon: <PackageIcon size={16} />, accent: "#059669" },
+              ] as const).map((q) => (
+                <div key={q.label} className="rounded-xl border border-slate-100 p-3">
+                  <div className="flex items-center gap-2 text-slate-400"><span style={{ color: q.accent }}>{q.icon}</span><span className="text-[11px] font-bold uppercase tracking-wider">{q.label}</span></div>
+                  <p className="mt-1.5 text-2xl font-extrabold text-ink">{NUM.format(q.kpi.value)}</p>
+                  <DeltaBadge delta={q.kpi.deltaPct} suffix="vs Yesterday" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 30-day revenue trend */}
+          <div className="card p-5">
+            <h3 className="font-extrabold text-ink">Revenue trend <span className="text-sm font-normal text-slate-400">(last 30 days)</span></h3>
+            <div className="mt-4 h-[260px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={trendData} margin={{ left: 8, right: 8 }}>
+                  <defs>
+                    <linearGradient id="dashExpected" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={COLOR_EXPECTED} stopOpacity={0.25} /><stop offset="95%" stopColor={COLOR_EXPECTED} stopOpacity={0} /></linearGradient>
+                    <linearGradient id="dashRealized" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor={COLOR_REALIZED} stopOpacity={0.25} /><stop offset="95%" stopColor={COLOR_REALIZED} stopOpacity={0} /></linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                  <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={24} />
+                  <YAxis tickFormatter={(v) => CAD.format(Number(v))} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+                  <ReTooltip formatter={(v) => CAD_PRECISE.format(Number(v))} />
+                  <Legend />
+                  <Area type="monotone" dataKey="expected" name="Expected" stroke={COLOR_EXPECTED} fill="url(#dashExpected)" strokeWidth={2} />
+                  <Area type="monotone" dataKey="realized" name="Realized" stroke={COLOR_REALIZED} fill="url(#dashRealized)" strokeWidth={2} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </>
+      )}
+
+      {goalsOpen && <GoalsModal services={services} monthKey={month} toast={toast} onClose={(changed) => { setGoalsOpen(false); if (changed) setReloadKey((n) => n + 1); }} />}
+    </div>
+  );
+}
+
+/** Read-only service×centre count matrix. Renders the RevenuePivot payload as a heat-tinted table. */
+function MatrixCard({ matrix }: { matrix: RevenuePivot }) {
+  const MATRIX_SEP = String.fromCharCode(31); // US separator: collision-proof composite key (built + read only here).
+  const cellMap = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of matrix.cells) m.set(c.row + MATRIX_SEP + c.col, c.expectedCount);
+    return m;
+  }, [matrix]);
+  const values = matrix.cells.map((c) => c.expectedCount);
+  const max = values.length ? Math.max(...values) : 0;
+  const tint = (v: number) => (max <= 0 || v <= 0) ? "transparent" : `rgba(79,70,229,${(0.03 + 0.16 * v / max).toFixed(3)})`;
+  const rowTotal = (r: string) => matrix.colKeys.reduce((s, c) => s + (cellMap.get(r + MATRIX_SEP + c) ?? 0), 0);
+  const colTotal = (c: string) => matrix.rowKeys.reduce((s, r) => s + (cellMap.get(r + MATRIX_SEP + c) ?? 0), 0);
+  const grand = values.reduce((s, v) => s + v, 0);
+  return (
+    <div className="card p-5">
+      <h3 className="font-extrabold text-ink">Service × centre <span className="text-sm font-normal text-slate-400">(bookings this month)</span></h3>
+      <div className="mt-4 overflow-auto">
+        <table className="min-w-full border-separate border-spacing-0 text-left text-sm">
+          <thead className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            <tr>
+              <th className="sticky left-0 z-10 bg-white py-2 pr-3">Service</th>
+              {matrix.colKeys.map((c) => <th key={c} className="whitespace-nowrap px-3 py-2 text-right">{c}</th>)}
+              <th className="px-3 py-2 text-right text-ink">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {matrix.rowKeys.map((r) => (
+              <tr key={r} className="group">
+                <td className="sticky left-0 z-10 bg-white py-2 pr-3 font-semibold text-ink group-hover:bg-slate-50">{r}</td>
+                {matrix.colKeys.map((c) => {
+                  const v = cellMap.get(r + MATRIX_SEP + c) ?? 0;
+                  return <td key={c} className="px-3 py-2 text-right tabular-nums text-slate-700" style={{ backgroundColor: tint(v) }}>{v || <span className="text-slate-300">—</span>}</td>;
+                })}
+                <td className="px-3 py-2 text-right font-bold tabular-nums text-ink">{rowTotal(r)}</td>
+              </tr>
+            ))}
+            <tr className="bg-slate-50">
+              <td className="sticky left-0 z-10 border-t-2 border-slate-200 bg-slate-50 py-2 pr-3 font-bold uppercase tracking-wider text-slate-400">Total</td>
+              {matrix.colKeys.map((c) => <td key={c} className="border-t-2 border-slate-200 px-3 py-2 text-right font-bold tabular-nums text-ink">{colTotal(c)}</td>)}
+              <td className="border-t-2 border-slate-200 px-3 py-2 text-right font-extrabold tabular-nums text-brand-700">{grand}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function AnalysisScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
   const [measure, setMeasure] = useState<Measure>("revenue");
   const [preset, setPreset] = useState<RangePreset>("30d");
@@ -4067,7 +4589,7 @@ function AnalysisScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
       <div className="card p-4 sm:p-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="flex flex-wrap gap-2">
-            {([["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["ytd", "Year to date"], ["12m", "12 months"]] as const).map(([id, label]) => (
+            {([["7d", "7 days"], ["30d", "30 days"], ["90d", "90 days"], ["mtd", "Month to date"], ["ytd", "Year to date"], ["12m", "12 months"]] as const).map(([id, label]) => (
               <button key={id} onClick={() => applyPreset(id)}
                 className={clsx("rounded-lg px-3 py-1.5 text-xs font-bold", preset === id ? "bg-brand-600 text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50")}>
                 {label}
@@ -4353,6 +4875,10 @@ export default function AdminPortal() {
   const content = () => {
     if (section === "docs") return <AdminDocs />;
     if (dataLoading) return <ScreenSkeleton />;
+    if (section === "overview") {
+      if (user.role !== "owner" && user.role !== "admin") return <PlaceholderDenied />;
+      return <DashboardScreen services={services} toast={toast} openSection={openSection} />;
+    }
     if (section === "dashboard") return <TodayDashboard bookings={bookings} centers={centers} services={services} resources={resources} groups={groups} overrides={overrides} setOverrides={setOverrides} onResync={onResync} onReconcile={onReconcile} openSection={openSection} />;
     if (section === "bookings") return <BookingsScreen bookings={bookings} centers={centers} services={services} onResync={onResync} onCancel={onCancel} onReconcile={onReconcile} reload={loadAll} />;
     if (section === "revenue") {
