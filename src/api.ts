@@ -15,6 +15,8 @@ import type {
   RetentionJob,
   RetentionSettings,
   RevenueReport,
+  DashboardReport,
+  PerformanceTarget,
   Service,
   Slot
 } from "../shared/types";
@@ -172,6 +174,20 @@ export const adminApi = {
     if (params.pivotCol) qs.set("pivotCol", params.pivotCol);
     return request<RevenueReport>(`/api/admin/revenue?${qs.toString()}`);
   },
+
+  // Executive dashboard (owner/admin). month is YYYY-MM (Montreal-local); defaults to current month.
+  dashboard: (params?: { month?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.month) qs.set("month", params.month);
+    const suffix = qs.toString();
+    return request<DashboardReport>(`/api/admin/dashboard${suffix ? `?${suffix}` : ""}`);
+  },
+
+  // Manual performance goals that back the dashboard's Goal / progress columns.
+  targets: () => request<{ targets: PerformanceTarget[] }>("/api/admin/targets"),
+  saveTarget: (payload: Omit<PerformanceTarget, "id">) =>
+    request<PerformanceTarget>("/api/admin/targets", { method: "POST", body: JSON.stringify(payload) }),
+  deleteTarget: (id: string) => request(`/api/admin/targets/${id}`, { method: "DELETE" }),
 
   // Overrides
   overrides: () => request<{ overrides: Array<Record<string, string>> }>("/api/admin/overrides"),
