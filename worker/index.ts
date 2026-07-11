@@ -257,9 +257,12 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
       .map(([key, b]) => ({ key, ...b }))
       .sort((a, b) => sortByKey ? a.key.localeCompare(b.key) : b.expectedCount - a.expectedCount);
 
-  // Calendar order for the month-of-year seasonality view.
+  // Calendar order for the seasonality views (month-of-year and day-of-week), so the chart x-axis
+  // reads Jan→Dec / Mon→Sun instead of being sorted by volume.
   const MONTH_ORDER = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
   const byMonthOrdered = MONTH_ORDER.filter((m) => byMonthOfYear.has(m)).map((m) => ({ key: m, ...byMonthOfYear.get(m)! }));
+  const WEEKDAY_ORDER = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const byWeekdayOrdered = WEEKDAY_ORDER.filter((d) => byWeekday.has(d)).map((d) => ({ key: d, ...byWeekday.get(d)! }));
 
   // Build a gap-free series: enumerate EVERY period key from `from` to `to` and zero-fill the ones
   // with no bookings, so the chart's x-axis has uniform intervals (no collapsed/uneven spacing on
@@ -309,7 +312,7 @@ async function revenueReport(request: Request, env: Env): Promise<Response> {
     byPackage: toSortedArray(byPackage),
     byCenter: toSortedArray(byCenter),
     byInstructor: toSortedArray(byInstructor),
-    byWeekday: toSortedArray(byWeekday),
+    byWeekday: byWeekdayOrdered,
     byMonthOfYear: byMonthOrdered,
     pivot: pivotPayload
   });

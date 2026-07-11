@@ -3581,6 +3581,24 @@ function yearAgoRange(from: string, to: string): { from: string; to: string } {
   return { from: shift(from), to: shift(to) };
 }
 
+/**
+ * Human x-axis label for a trend period key. Day keys (YYYY-MM-DD) render as "Jul 11 · Sat"; week
+ * keys (the Monday's YYYY-MM-DD) as "Week of Jul 7"; month keys (YYYY-MM) as "Jul 2026". The date is
+ * parsed at UTC noon so the weekday/day-of-month never drift across the Montreal offset.
+ */
+function trendAxisLabel(key: string, granularity: "day" | "week" | "month"): string {
+  if (granularity === "month") {
+    const [y, m] = key.split("-").map(Number);
+    return new Date(Date.UTC(y, m - 1, 1)).toLocaleDateString("en-CA", { month: "short", year: "numeric", timeZone: "UTC" });
+  }
+  const [y, m, d] = key.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d, 12));
+  const md = date.toLocaleDateString("en-CA", { month: "short", day: "numeric", timeZone: "UTC" });
+  if (granularity === "week") return `Week of ${md}`;
+  const dow = date.toLocaleDateString("en-CA", { weekday: "short", timeZone: "UTC" });
+  return `${md} · ${dow}`;
+}
+
 /** Quote a CSV cell (wrap in quotes and escape embedded quotes) so commas/quotes don't break columns. */
 function csvCell(value: string | number): string {
   const s = String(value);
@@ -4525,6 +4543,7 @@ function AnalysisScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
   const [to, setTo] = useState(initial.to);
   const [granularity, setGranularity] = useState<"day" | "week" | "month">("day");
   const [compare, setCompare] = useState<"none" | "previous" | "yoy">("none");
+  const [trendChart, setTrendChart] = useState<"line" | "bar">("line");
   const [pivotRow, setPivotRow] = useState<RevenueDimension>("service");
   const [pivotCol, setPivotCol] = useState<RevenueDimension>("center");
 
@@ -4647,35 +4666,56 @@ function AnalysisScreen({ toast }: { toast: ReturnType<typeof useToast> }) {
 
           {/* Trend */}
           <div className="card p-5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="font-extrabold text-ink">{isRevenue ? "Revenue" : "Bookings"} over time</h3>
               <div className="flex items-center gap-3">
                 <span className="hidden text-xs text-slate-400 sm:inline">{report.from} → {report.to} · by {granularity}</span>
+                <div className="inline-flex overflow-hidden rounded-lg border border-slate-200 text-[11px] font-bold">
+                  {(["line", "bar"] as const).map((t) => (
+                    <button key={t} onClick={() => setTrendChart(t)}
+                      className={clsx("px-2.5 py-1 capitalize", trendChart === t ? "bg-brand-600 text-white" : "text-slate-500 hover:bg-slate-50")}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
                 <CardExport onClick={() => downloadBucketsCsv(`${isRevenue ? "revenue" : "bookings"}-over-time-by-${granularity}`, granularity === "month" ? "Month" : granularity === "week" ? "Week starting" : "Date", report.series, measure)} />
               </div>
             </div>
             <div className="mt-4 h-[320px] w-full">
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={trendData} margin={{ left: 8, right: 8 }}>
-                  <defs>
-                    <linearGradient id="gradExpected" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={COLOR_EXPECTED} stopOpacity={0.25} />
-                      <stop offset="95%" stopColor={COLOR_EXPECTED} stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="gradRealized" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={COLOR_REALIZED} stopOpacity={0.25} />
-                      <stop offset="95%" stopColor={COLOR_REALIZED} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid vertical={false} stroke="#e2e8f0" />
-                  <XAxis dataKey="key" tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={24} />
-                  <YAxis allowDecimals={measure === "revenue"} tickFormatter={(v) => measureAxis(Number(v), measure)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
-                  <ReTooltip formatter={(v) => measurePrecise(Number(v), measure)} />
-                  <Legend />
-                  <Area type="monotone" dataKey="expected" name={isRevenue ? "Expected" : "Bookings"} stroke={COLOR_EXPECTED} fill="url(#gradExpected)" strokeWidth={2} />
-                  <Area type="monotone" dataKey="realized" name={isRevenue ? "Realized" : "Completed"} stroke={COLOR_REALIZED} fill="url(#gradRealized)" strokeWidth={2} />
-                  {compare !== "none" && <Area type="monotone" dataKey="compare" name={compare === "previous" ? "Prev. period" : "Last year"} stroke="#94a3b8" strokeDasharray="4 3" fill="none" strokeWidth={1.5} />}
-                </AreaChart>
+                {trendChart === "bar" ? (
+                  <BarChart data={trendData} margin={{ left: 8, right: 8 }}>
+                    <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="key" tickFormatter={(v) => trendAxisLabel(String(v), granularity)} tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={16} />
+                    <YAxis allowDecimals={measure === "revenue"} tickFormatter={(v) => measureAxis(Number(v), measure)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+                    <ReTooltip formatter={(v) => measurePrecise(Number(v), measure)} labelFormatter={(l) => trendAxisLabel(String(l), granularity)} cursor={{ fill: "#f1f5f9" }} />
+                    <Legend />
+                    <Bar dataKey="expected" name={isRevenue ? "Expected" : "Bookings"} fill={COLOR_EXPECTED} radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="realized" name={isRevenue ? "Realized" : "Completed"} fill={COLOR_REALIZED} radius={[4, 4, 0, 0]} />
+                    {compare !== "none" && <Bar dataKey="compare" name={compare === "previous" ? "Prev. period" : "Last year"} fill="#cbd5e1" radius={[4, 4, 0, 0]} />}
+                  </BarChart>
+                ) : (
+                  <AreaChart data={trendData} margin={{ left: 8, right: 8 }}>
+                    <defs>
+                      <linearGradient id="gradExpected" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={COLOR_EXPECTED} stopOpacity={0.25} />
+                        <stop offset="95%" stopColor={COLOR_EXPECTED} stopOpacity={0} />
+                      </linearGradient>
+                      <linearGradient id="gradRealized" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="5%" stopColor={COLOR_REALIZED} stopOpacity={0.25} />
+                        <stop offset="95%" stopColor={COLOR_REALIZED} stopOpacity={0} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid vertical={false} stroke="#e2e8f0" />
+                    <XAxis dataKey="key" tickFormatter={(v) => trendAxisLabel(String(v), granularity)} tick={{ fontSize: 11, fill: "#94a3b8" }} minTickGap={24} />
+                    <YAxis allowDecimals={measure === "revenue"} tickFormatter={(v) => measureAxis(Number(v), measure)} tick={{ fontSize: 11, fill: "#94a3b8" }} width={70} />
+                    <ReTooltip formatter={(v) => measurePrecise(Number(v), measure)} labelFormatter={(l) => trendAxisLabel(String(l), granularity)} />
+                    <Legend />
+                    <Area type="monotone" dataKey="expected" name={isRevenue ? "Expected" : "Bookings"} stroke={COLOR_EXPECTED} fill="url(#gradExpected)" strokeWidth={2} />
+                    <Area type="monotone" dataKey="realized" name={isRevenue ? "Realized" : "Completed"} stroke={COLOR_REALIZED} fill="url(#gradRealized)" strokeWidth={2} />
+                    {compare !== "none" && <Area type="monotone" dataKey="compare" name={compare === "previous" ? "Prev. period" : "Last year"} stroke="#94a3b8" strokeDasharray="4 3" fill="none" strokeWidth={1.5} />}
+                  </AreaChart>
+                )}
               </ResponsiveContainer>
             </div>
           </div>
